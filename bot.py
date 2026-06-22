@@ -43,7 +43,12 @@ FIBO_LOW = 0.618
 FIBO_HIGH = 0.709
 MIN_RR = 2.0
 ATR_PERIOD = 14
-ATR_MIN_MULTIPLIER = 0.5  # ATR doit être > 50% de la moyenne
+ATR_MIN_MULTIPLIER = 0.5
+
+# Signaux actifs en attente de suivi
+# key = symbol -> signal dict + timestamp
+pending_signals = {}
+FOLLOW_UP_DELAY = 1800  # 30 minutes
 
 
 def compute_ema(closes, period):
@@ -83,7 +88,6 @@ def compute_atr(candles, period=14):
 
 
 def detect_order_block(candles):
-    """Returns OB with price levels for dynamic SL."""
     if len(candles) < 3:
         return None
     c1, c2, c3 = candles[-3], candles[-2], candles[-1]
@@ -103,11 +107,9 @@ def detect_fvg(candles):
         return None
     c1, c2, c3 = candles[-3], candles[-2], candles[-1]
     if c3["low"] > c1["high"]:
-        fvg_size = c3["low"] - c1["high"]
-        return {"type": "bullish", "size": fvg_size}
+        return {"type": "bullish", "size": c3["low"] - c1["high"]}
     if c3["high"] < c1["low"]:
-        fvg_size = c1["low"] - c3["high"]
-        return {"type": "bearish", "size": fvg_size}
+        return {"type": "bearish", "size": c1["low"] - c3["high"]}
     return None
 
 
@@ -118,13 +120,10 @@ def detect_crt(candles):
     c1_range = c1["high"] - c1["low"]
     if c1_range == 0:
         return None
-    # Mesure la force du CRT (% de récupération)
     if c2["low"] < c1["low"] and c3["close"] > (c1["low"] + c1_range * 0.5):
-        recovery = (c3["close"] - c1["low"]) / c1_range
-        return {"type": "bullish", "strength": round(recovery, 2)}
+        return {"type": "bullish", "strength": round((c3["close"] - c1["low"]) / c1_range, 2)}
     if c2["high"] > c1["high"] and c3["close"] < (c1["high"] - c1_range * 0.5):
-        recovery = (c1["high"] - c3["close"]) / c1_range
-        return {"type": "bearish", "strength": round(recovery, 2)}
+        return {"type": "bearish", "strength": round((c1["high"] - c3["close"]) / c1_range, 2)}
     return None
 
 
@@ -145,58 +144,42 @@ def fibo_zone(swing_high, swing_low, direction):
 
 
 def compute_signal_score(ob, fvg, crt, h4_bias, atr_ratio):
-    """Score 1-5 basé sur la qualité des confluences."""
     score = 0
-
-    # OB présent = +1
     if ob and ob["type"] == h4_bias:
         score += 1
-
-    # FVG présent, bonus si large
     if fvg and fvg["type"] == h4_bias:
         score += 1
         if fvg.get("size", 0) > 0:
             score += 0.5
-
-    # CRT présent, bonus si forte récupération
     if crt and crt["type"] == h4_bias:
         score += 1
         if crt.get("strength", 0) > 0.75:
             score += 0.5
-
-    # Bonus si ATR élevé (marché actif)
     if atr_ratio and atr_ratio > 1.2:
         score += 0.5
-
     return min(5, round(score))
 
 
 def score_to_stars(score):
-    filled = "⭐" * score
-    empty = "☆" * (5 - score)
-    return filled + empty
+    return "⭐" * score + "☆" * (5 - score)
 
 
 def analyze(symbol, m5, h1, h4):
-    # Biais H4
     if len(h4) < 21:
         return None
     h4_bias = get_bias(h4)
     if h4_bias is None:
         return None
 
-    # Confirmation H1
     if len(h1) < 21:
         return None
     h1_bias = get_bias(h1)
     if h1_bias is None or h1_bias != h4_bias:
         return None
 
-    # Setup M5
     if len(m5) < 20:
         return None
 
-    # Filtre ATR — marché pas trop plat
     current_atr, avg_atr = compute_atr(m5, ATR_PERIOD)
     if current_atr is None or avg_atr is None:
         return None
@@ -213,8 +196,6 @@ def analyze(symbol, m5, h1, h4):
         return None
 
     current_price = m5[-1]["close"]
-
-    # Zone Fibo 61.8-70.9% sur M5
     m5_high, m5_low = get_swing_points(m5)
     m5_range = m5_high - m5_low
     if m5_range == 0:
@@ -224,20 +205,12 @@ def analyze(symbol, m5, h1, h4):
     if not (zone_low <= current_price <= zone_high):
         return None
 
-    # SL dynamique basé sur l'OB si disponible, sinon swing M5
     entry = current_price
     if ob and ob["type"] == h4_bias:
-        if h4_bias == "bullish":
-            sl = ob["ob_low"] * 0.999  # Juste sous le bas de l'OB
-        else:
-            sl = ob["ob_high"] * 1.001  # Juste au-dessus du haut de l'OB
+        sl = ob["ob_low"] * 0.999 if h4_bias == "bullish" else ob["ob_high"] * 1.001
     else:
-        if h4_bias == "bullish":
-            sl = m5_low - m5_range * 0.02
-        else:
-            sl = m5_high + m5_range * 0.02
+        sl = m5_low - m5_range * 0.02 if h4_bias == "bullish" else m5_high + m5_range * 0.02
 
-    # TP basés sur swing H1
     h1_high, h1_low = get_swing_points(h1, lookback=len(h1))
     h1_range = h1_high - h1_low
     if h1_range == 0:
@@ -268,14 +241,12 @@ def analyze(symbol, m5, h1, h4):
         "name": INSTRUMENT_NAMES.get(symbol, symbol),
         "direction": h4_bias,
         "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2,
-        "rr1": round(rr1, 2),
-        "rr2": round(rr2, 2),
+        "rr1": round(rr1, 2), "rr2": round(rr2, 2),
         "confluence": confluence,
         "ob": ob is not None and ob["type"] == h4_bias,
         "fvg": fvg is not None and fvg["type"] == h4_bias,
         "crt": crt is not None and crt["type"] == h4_bias,
-        "h4_bias": h4_bias,
-        "h1_bias": h1_bias,
+        "h4_bias": h4_bias, "h1_bias": h1_bias,
         "fibo_low": round(zone_low, 5),
         "fibo_high": round(zone_high, 5),
         "score": score,
@@ -313,6 +284,99 @@ def format_signal(sig):
     )
 
 
+async def fetch_current_price(symbol):
+    """Récupère le prix actuel via WebSocket Deriv."""
+    try:
+        async with websockets.connect(DERIV_WS_URL, ping_interval=20) as ws:
+            req = {"ticks": symbol, "subscribe": 0}
+            await ws.send(json.dumps(req))
+            while True:
+                resp = json.loads(await ws.recv())
+                if resp.get("msg_type") == "tick":
+                    return float(resp["tick"]["quote"])
+                if "error" in resp:
+                    return None
+    except Exception:
+        return None
+
+
+async def check_follow_ups(bot):
+    """Vérifie les signaux en attente et envoie le résultat."""
+    now = datetime.now(timezone.utc).timestamp()
+    to_remove = []
+
+    for key, pending in list(pending_signals.items()):
+        signal = pending["signal"]
+        sent_at = pending["sent_at"]
+
+        if now - sent_at < FOLLOW_UP_DELAY:
+            continue
+
+        current_price = await fetch_current_price(signal["symbol"])
+        if current_price is None:
+            to_remove.append(key)
+            continue
+
+        direction = signal["direction"]
+        entry = signal["entry"]
+        sl = signal["sl"]
+        tp1 = signal["tp1"]
+        tp2 = signal["tp2"]
+        p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
+
+        # Détermine le résultat
+        if direction == "bullish":
+            if current_price >= tp2:
+                result = "tp2"
+            elif current_price >= tp1:
+                result = "tp1"
+            elif current_price <= sl:
+                result = "sl"
+            else:
+                result = "open"
+        else:
+            if current_price <= tp2:
+                result = "tp2"
+            elif current_price <= tp1:
+                result = "tp1"
+            elif current_price >= sl:
+                result = "sl"
+            else:
+                result = "open"
+
+        if result == "tp2":
+            emoji = "🚀"
+            label = "TP2 ATTEINT"
+        elif result == "tp1":
+            emoji = "✅"
+            label = "TP1 ATTEINT"
+        elif result == "sl":
+            emoji = "❌"
+            label = "SL TOUCHÉ"
+        else:
+            emoji = "⏳"
+            label = "EN COURS"
+
+        msg = (
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{emoji} *Suivi — {signal['name']}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"*Résultat :* {label}\n\n"
+            f"Prix actuel : `{p(current_price)}`\n"
+            f"Entry : `{p(entry)}`\n"
+            f"SL : `{p(sl)}` | TP1 : `{p(tp1)}` | TP2 : `{p(tp2)}`\n"
+            f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+
+        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+        logger.info(f"Follow-up sent: {signal['symbol']} → {label}")
+        to_remove.append(key)
+
+    for key in to_remove:
+        pending_signals.pop(key, None)
+
+
 async def send_signal(bot, signal):
     key = (signal["symbol"], signal["direction"])
     now = datetime.now(timezone.utc).timestamp()
@@ -320,7 +384,9 @@ async def send_signal(bot, signal):
         return
     last_signal_time[key] = now
     await bot.send_message(chat_id=CHAT_ID, text=format_signal(signal), parse_mode=ParseMode.MARKDOWN)
-    logger.info(f"Signal sent: {signal['symbol']} {signal['direction']} Score={signal['score']} RR1={signal['rr1']}")
+    # Ajouter au suivi
+    pending_signals[signal["symbol"]] = {"signal": signal, "sent_at": now}
+    logger.info(f"Signal sent: {signal['symbol']} {signal['direction']} Score={signal['score']}")
 
 
 async def fetch_candles(ws, symbol, granularity, count=50):
@@ -340,6 +406,8 @@ async def fetch_candles(ws, symbol, granularity, count=50):
 
 async def scan_all(bot):
     logger.info("Starting scan...")
+    # Vérifier les suivis en attente
+    await check_follow_ups(bot)
     try:
         async with websockets.connect(DERIV_WS_URL, ping_interval=20) as ws:
             for symbol in INSTRUMENTS:
@@ -378,6 +446,7 @@ async def main():
             "📈 H4 → H1 → M5\n"
             "⚖️ R:R min 2.0 | Cooldown 4h\n"
             "🏆 Score qualité 1–5\n"
+            "📬 Suivi résultat après 30 min\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
