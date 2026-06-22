@@ -39,6 +39,9 @@ INSTRUMENT_NAMES = {
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
 last_signal_time = {}
 
+FIBO_LOW = 0.618
+FIBO_HIGH = 0.709
+
 
 def compute_ema(closes, period):
     if len(closes) < period:
@@ -103,28 +106,37 @@ def get_swing_points(candles, lookback=20):
     return max(c["high"] for c in subset), min(c["low"] for c in subset)
 
 
-def analyze(symbol, m5, m15, h4):
-    # Biais H4 (global)
+def fibo_zone(swing_high, swing_low, direction):
+    price_range = swing_high - swing_low
+    if direction == "bullish":
+        zone_high = swing_high - price_range * FIBO_LOW
+        zone_low = swing_high - price_range * FIBO_HIGH
+    else:
+        zone_low = swing_low + price_range * FIBO_LOW
+        zone_high = swing_low + price_range * FIBO_HIGH
+    return zone_low, zone_high
+
+
+def analyze(symbol, m5, h1, h4):
     if len(h4) < 21:
         return None
     h4_bias = get_bias(h4)
     if h4_bias is None:
         return None
 
-    # Confirmation M15
-    if len(m15) < 21:
+    if len(h1) < 21:
         return None
-    m15_bias = get_bias(m15)
-    if m15_bias is None or m15_bias != h4_bias:
+    h1_bias = get_bias(h1)
+    if h1_bias is None or h1_bias != h4_bias:
         return None
 
-    # Setup M5
     if len(m5) < 20:
         return None
 
     ob = detect_order_block(m5)
     fvg = detect_fvg(m5)
     crt = detect_crt(m5)
+
     confluence = sum(1 for s in [ob, fvg, crt] if s and s["type"] == h4_bias)
     if confluence < 2:
         return None
@@ -133,6 +145,10 @@ def analyze(symbol, m5, m15, h4):
     swing_high, swing_low = get_swing_points(m5)
     price_range = swing_high - swing_low
     if price_range == 0:
+        return None
+
+    zone_low, zone_high = fibo_zone(swing_high, swing_low, h4_bias)
+    if not (zone_low <= current_price <= zone_high):
         return None
 
     entry = current_price
@@ -161,18 +177,20 @@ def analyze(symbol, m5, m15, h4):
         "fvg": fvg is not None and fvg["type"] == h4_bias,
         "crt": crt is not None and crt["type"] == h4_bias,
         "h4_bias": h4_bias,
-        "m15_bias": m15_bias,
+        "h1_bias": h1_bias,
+        "fibo_low": round(zone_low, 5),
+        "fibo_high": round(zone_high, 5),
     }
 
 
 def format_signal(sig):
     arrow = "🟢 BUY" if sig["direction"] == "bullish" else "🔴 SELL"
+    bias_icon = "🟢" if sig["h4_bias"] == "bullish" else "🔴"
     icons = []
     if sig["ob"]: icons.append("🧱 OB")
     if sig["fvg"]: icons.append("🌫 FVG")
     if sig["crt"]: icons.append("🔄 CRT")
     p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
-    bias_icon = "🟢" if sig["h4_bias"] == "bullish" else "🔴"
     return (
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *{sig['name']}*\n"
@@ -183,10 +201,12 @@ def format_signal(sig):
         f"✅ *TP1 :* `{p(sig['tp1'])}`\n"
         f"🚀 *TP2 :* `{p(sig['tp2'])}`\n\n"
         f"⚖️ *R:R :* `{sig['rr']}`\n\n"
+        f"📐 *Zone Fibo 61.8–70.9% :*\n"
+        f"`{p(sig['fibo_low'])}` → `{p(sig['fibo_high'])}`\n\n"
         f"🔍 *Confluence ({sig['confluence']}/3) :*\n"
         f"{'  '.join(icons)}\n\n"
-        f"📐 *Analyse Multi-TF :*\n"
-        f"  H4 {bias_icon} → M15 {bias_icon} → M5 ✅\n\n"
+        f"📈 *Multi-TF :*\n"
+        f"  H4 {bias_icon} → H1 {bias_icon} → M5 ✅\n\n"
         f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
@@ -225,13 +245,13 @@ async def scan_all(bot):
                 try:
                     m5 = await fetch_candles(ws, symbol, 300, 50)
                     await asyncio.sleep(0.3)
-                    m15 = await fetch_candles(ws, symbol, 900, 30)
+                    h1 = await fetch_candles(ws, symbol, 3600, 30)
                     await asyncio.sleep(0.3)
                     h4 = await fetch_candles(ws, symbol, 14400, 30)
                     await asyncio.sleep(0.3)
-                    if not m5 or not m15 or not h4:
+                    if not m5 or not h1 or not h4:
                         continue
-                    signal = analyze(symbol, m5, m15, h4)
+                    signal = analyze(symbol, m5, h1, h4)
                     if signal:
                         await send_signal(bot, signal)
                 except Exception as e:
@@ -253,7 +273,8 @@ async def main():
             "✅ Bot démarré\n"
             f"📊 {len(INSTRUMENTS)} instruments surveillés\n"
             "⏱ Scan toutes les 5 minutes\n"
-            "🔍 SMC + CRT | H4 → M15 → M5\n"
+            "🔍 OB + FVG + CRT | Fibo 61.8–70.9%\n"
+            "📈 H4 → H1 → M5\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
