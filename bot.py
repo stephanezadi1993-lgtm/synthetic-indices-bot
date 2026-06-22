@@ -44,11 +44,8 @@ FIBO_HIGH = 0.709
 MIN_RR = 2.0
 ATR_PERIOD = 14
 ATR_MIN_MULTIPLIER = 0.5
-
-# Signaux actifs en attente de suivi
-# key = symbol -> signal dict + timestamp
 pending_signals = {}
-FOLLOW_UP_DELAY = 1800  # 30 minutes
+FOLLOW_UP_DELAY = 1800
 
 
 def compute_ema(closes, period):
@@ -81,8 +78,7 @@ def compute_atr(candles, period=14):
         trs.append(tr)
     if len(trs) < period:
         return None, None
-    recent_trs = trs[-period:]
-    current_atr = sum(recent_trs) / period
+    current_atr = sum(trs[-period:]) / period
     avg_atr = sum(trs) / len(trs)
     return current_atr, avg_atr
 
@@ -170,52 +166,42 @@ def analyze(symbol, m5, h1, h4):
     h4_bias = get_bias(h4)
     if h4_bias is None:
         return None
-
     if len(h1) < 21:
         return None
     h1_bias = get_bias(h1)
     if h1_bias is None or h1_bias != h4_bias:
         return None
-
     if len(m5) < 20:
         return None
-
     current_atr, avg_atr = compute_atr(m5, ATR_PERIOD)
     if current_atr is None or avg_atr is None:
         return None
     if current_atr < avg_atr * ATR_MIN_MULTIPLIER:
         return None
     atr_ratio = current_atr / avg_atr if avg_atr > 0 else 1.0
-
     ob = detect_order_block(m5)
     fvg = detect_fvg(m5)
     crt = detect_crt(m5)
-
     confluence = sum(1 for s in [ob, fvg, crt] if s and s["type"] == h4_bias)
     if confluence < 2:
         return None
-
     current_price = m5[-1]["close"]
     m5_high, m5_low = get_swing_points(m5)
     m5_range = m5_high - m5_low
     if m5_range == 0:
         return None
-
     zone_low, zone_high = fibo_zone(m5_high, m5_low, h4_bias)
     if not (zone_low <= current_price <= zone_high):
         return None
-
     entry = current_price
     if ob and ob["type"] == h4_bias:
         sl = ob["ob_low"] * 0.999 if h4_bias == "bullish" else ob["ob_high"] * 1.001
     else:
         sl = m5_low - m5_range * 0.02 if h4_bias == "bullish" else m5_high + m5_range * 0.02
-
     h1_high, h1_low = get_swing_points(h1, lookback=len(h1))
     h1_range = h1_high - h1_low
     if h1_range == 0:
         return None
-
     if h4_bias == "bullish":
         tp1 = entry + h1_range * 0.618
         tp2 = entry + h1_range * 1.0
@@ -224,18 +210,13 @@ def analyze(symbol, m5, h1, h4):
         tp1 = entry - h1_range * 0.618
         tp2 = entry - h1_range * 1.0
         sl_dist = sl - entry
-
     if sl_dist <= 0:
         return None
-
     rr1 = abs(tp1 - entry) / sl_dist
     rr2 = abs(tp2 - entry) / sl_dist
-
     if rr1 < MIN_RR:
         return None
-
     score = compute_signal_score(ob, fvg, crt, h4_bias, atr_ratio)
-
     return {
         "symbol": symbol,
         "name": INSTRUMENT_NAMES.get(symbol, symbol),
@@ -273,7 +254,8 @@ def format_signal(sig):
         f"✅ *TP1 :* `{p(sig['tp1'])}` _(R:R {sig['rr1']})_\n"
         f"🚀 *TP2 :* `{p(sig['tp2'])}` _(R:R {sig['rr2']})_\n\n"
         f"📐 *Zone Fibo 61.8–70.9% :*\n"
-        f"`{p(sig['fibo_low'])}` → `{p(sig['fibo_high'])}`\n\n"
+        f"  🔼 High : `{p(sig['fibo_high'])}`\n"
+        f"  🔽 Low : `{p(sig['fibo_low'])}`\n\n"
         f"🔍 *Confluence ({sig['confluence']}/3) :*\n"
         f"{'  '.join(icons)}\n\n"
         f"📈 *Multi-TF :*\n"
@@ -285,7 +267,6 @@ def format_signal(sig):
 
 
 async def fetch_current_price(symbol):
-    """Récupère le prix actuel via WebSocket Deriv."""
     try:
         async with websockets.connect(DERIV_WS_URL, ping_interval=20) as ws:
             req = {"ticks": symbol, "subscribe": 0}
@@ -301,30 +282,23 @@ async def fetch_current_price(symbol):
 
 
 async def check_follow_ups(bot):
-    """Vérifie les signaux en attente et envoie le résultat."""
     now = datetime.now(timezone.utc).timestamp()
     to_remove = []
-
     for key, pending in list(pending_signals.items()):
         signal = pending["signal"]
         sent_at = pending["sent_at"]
-
         if now - sent_at < FOLLOW_UP_DELAY:
             continue
-
         current_price = await fetch_current_price(signal["symbol"])
         if current_price is None:
             to_remove.append(key)
             continue
-
         direction = signal["direction"]
         entry = signal["entry"]
         sl = signal["sl"]
         tp1 = signal["tp1"]
         tp2 = signal["tp2"]
         p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
-
-        # Détermine le résultat
         if direction == "bullish":
             if current_price >= tp2:
                 result = "tp2"
@@ -343,20 +317,14 @@ async def check_follow_ups(bot):
                 result = "sl"
             else:
                 result = "open"
-
         if result == "tp2":
-            emoji = "🚀"
-            label = "TP2 ATTEINT"
+            emoji, label = "🚀", "TP2 ATTEINT"
         elif result == "tp1":
-            emoji = "✅"
-            label = "TP1 ATTEINT"
+            emoji, label = "✅", "TP1 ATTEINT"
         elif result == "sl":
-            emoji = "❌"
-            label = "SL TOUCHÉ"
+            emoji, label = "❌", "SL TOUCHÉ"
         else:
-            emoji = "⏳"
-            label = "EN COURS"
-
+            emoji, label = "⏳", "EN COURS"
         msg = (
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"{emoji} *Suivi — {signal['name']}*\n"
@@ -368,11 +336,9 @@ async def check_follow_ups(bot):
             f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
             f"━━━━━━━━━━━━━━━━━━━━"
         )
-
         await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-        logger.info(f"Follow-up sent: {signal['symbol']} → {label}")
+        logger.info(f"Follow-up: {signal['symbol']} → {label}")
         to_remove.append(key)
-
     for key in to_remove:
         pending_signals.pop(key, None)
 
@@ -384,9 +350,8 @@ async def send_signal(bot, signal):
         return
     last_signal_time[key] = now
     await bot.send_message(chat_id=CHAT_ID, text=format_signal(signal), parse_mode=ParseMode.MARKDOWN)
-    # Ajouter au suivi
     pending_signals[signal["symbol"]] = {"signal": signal, "sent_at": now}
-    logger.info(f"Signal sent: {signal['symbol']} {signal['direction']} Score={signal['score']}")
+    logger.info(f"Signal: {signal['symbol']} {signal['direction']} Score={signal['score']}")
 
 
 async def fetch_candles(ws, symbol, granularity, count=50):
@@ -406,7 +371,6 @@ async def fetch_candles(ws, symbol, granularity, count=50):
 
 async def scan_all(bot):
     logger.info("Starting scan...")
-    # Vérifier les suivis en attente
     await check_follow_ups(bot)
     try:
         async with websockets.connect(DERIV_WS_URL, ping_interval=20) as ws:
