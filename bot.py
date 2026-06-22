@@ -19,9 +19,8 @@ INSTRUMENTS = [
     "1HZ10V", "1HZ25V", "1HZ50V", "1HZ75V", "1HZ100V",
     "BOOM300N", "BOOM500", "BOOM600", "BOOM900", "BOOM1000",
     "CRASH300N", "CRASH500", "CRASH600", "CRASH900", "CRASH1000",
-    "STPIDX",
+    "STPIDX10",
     "JD10", "JD25", "JD50", "JD75", "JD100",
-    "BEAR", "BULL",
 ]
 
 INSTRUMENT_NAMES = {
@@ -34,10 +33,9 @@ INSTRUMENT_NAMES = {
     "BOOM900": "Boom 900", "BOOM1000": "Boom 1000",
     "CRASH300N": "Crash 300", "CRASH500": "Crash 500", "CRASH600": "Crash 600",
     "CRASH900": "Crash 900", "CRASH1000": "Crash 1000",
-    "STPIDX": "Step Index",
+    "STPIDX10": "Step Index",
     "JD10": "Jump 10", "JD25": "Jump 25", "JD50": "Jump 50",
     "JD75": "Jump 75", "JD100": "Jump 100",
-    "BEAR": "Bear Market", "BULL": "Bull Market",
 }
 
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
