@@ -37,7 +37,6 @@ INSTRUMENT_NAMES = {
 }
 
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
-candles_store = {sym: {"m5": [], "m15": []} for sym in INSTRUMENTS}
 last_signal_time = {}
 
 
@@ -51,6 +50,14 @@ def compute_ema(closes, period):
     return ema
 
 
+def get_bias(candles, period=21):
+    closes = [c["close"] for c in candles]
+    ema = compute_ema(closes, period)
+    if ema is None:
+        return None
+    return "bullish" if closes[-1] > ema else "bearish"
+
+
 def detect_order_block(candles):
     if len(candles) < 3:
         return None
@@ -58,11 +65,11 @@ def detect_order_block(candles):
     if c2["close"] < c2["open"] and c3["close"] > c3["open"]:
         body_ratio = (c3["close"] - c3["open"]) / (c3["high"] - c3["low"] + 1e-10)
         if body_ratio > 0.6:
-            return {"type": "bullish", "ob_high": c2["high"], "ob_low": c2["low"]}
+            return {"type": "bullish"}
     if c2["close"] > c2["open"] and c3["close"] < c3["open"]:
         body_ratio = (c3["open"] - c3["close"]) / (c3["high"] - c3["low"] + 1e-10)
         if body_ratio > 0.6:
-            return {"type": "bearish", "ob_high": c2["high"], "ob_low": c2["low"]}
+            return {"type": "bearish"}
     return None
 
 
@@ -71,9 +78,9 @@ def detect_fvg(candles):
         return None
     c1, c2, c3 = candles[-3], candles[-2], candles[-1]
     if c3["low"] > c1["high"]:
-        return {"type": "bullish", "fvg_high": c3["low"], "fvg_low": c1["high"]}
+        return {"type": "bullish"}
     if c3["high"] < c1["low"]:
-        return {"type": "bearish", "fvg_high": c1["low"], "fvg_low": c3["high"]}
+        return {"type": "bearish"}
     return None
 
 
@@ -96,27 +103,40 @@ def get_swing_points(candles, lookback=20):
     return max(c["high"] for c in subset), min(c["low"] for c in subset)
 
 
-def analyze(symbol, m5_candles, m15_candles):
-    if len(m5_candles) < 20 or len(m15_candles) < 10:
+def analyze(symbol, m5, m15, h4):
+    # Biais H4 (global)
+    if len(h4) < 21:
         return None
-    m15_closes = [c["close"] for c in m15_candles]
-    ema21_m15 = compute_ema(m15_closes, 21)
-    if ema21_m15 is None:
+    h4_bias = get_bias(h4)
+    if h4_bias is None:
         return None
-    htf_bias = "bullish" if m15_closes[-1] > ema21_m15 else "bearish"
-    ob = detect_order_block(m5_candles)
-    fvg = detect_fvg(m5_candles)
-    crt = detect_crt(m5_candles)
-    confluence = sum(1 for s in [ob, fvg, crt] if s and s["type"] == htf_bias)
+
+    # Confirmation M15
+    if len(m15) < 21:
+        return None
+    m15_bias = get_bias(m15)
+    if m15_bias is None or m15_bias != h4_bias:
+        return None
+
+    # Setup M5
+    if len(m5) < 20:
+        return None
+
+    ob = detect_order_block(m5)
+    fvg = detect_fvg(m5)
+    crt = detect_crt(m5)
+    confluence = sum(1 for s in [ob, fvg, crt] if s and s["type"] == h4_bias)
     if confluence < 2:
         return None
-    current_price = m5_candles[-1]["close"]
-    swing_high, swing_low = get_swing_points(m5_candles)
+
+    current_price = m5[-1]["close"]
+    swing_high, swing_low = get_swing_points(m5)
     price_range = swing_high - swing_low
     if price_range == 0:
         return None
+
     entry = current_price
-    if htf_bias == "bullish":
+    if h4_bias == "bullish":
         sl = swing_low - price_range * 0.02
         tp1 = entry + price_range * 0.382
         tp2 = entry + price_range * 0.618
@@ -126,16 +146,22 @@ def analyze(symbol, m5_candles, m15_candles):
         tp1 = entry - price_range * 0.382
         tp2 = entry - price_range * 0.618
         rr = (entry - tp1) / (sl - entry) if (sl - entry) > 0 else 0
+
     if rr < 1.5:
         return None
+
     return {
-        "symbol": symbol, "name": INSTRUMENT_NAMES.get(symbol, symbol),
-        "direction": htf_bias, "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2,
-        "rr": round(rr, 2), "confluence": confluence,
-        "ob": ob is not None and ob["type"] == htf_bias,
-        "fvg": fvg is not None and fvg["type"] == htf_bias,
-        "crt": crt is not None and crt["type"] == htf_bias,
-        "htf_bias": htf_bias,
+        "symbol": symbol,
+        "name": INSTRUMENT_NAMES.get(symbol, symbol),
+        "direction": h4_bias,
+        "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2,
+        "rr": round(rr, 2),
+        "confluence": confluence,
+        "ob": ob is not None and ob["type"] == h4_bias,
+        "fvg": fvg is not None and fvg["type"] == h4_bias,
+        "crt": crt is not None and crt["type"] == h4_bias,
+        "h4_bias": h4_bias,
+        "m15_bias": m15_bias,
     }
 
 
@@ -146,6 +172,7 @@ def format_signal(sig):
     if sig["fvg"]: icons.append("🌫 FVG")
     if sig["crt"]: icons.append("🔄 CRT")
     p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
+    bias_icon = "🟢" if sig["h4_bias"] == "bullish" else "🔴"
     return (
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *{sig['name']}*\n"
@@ -158,7 +185,8 @@ def format_signal(sig):
         f"⚖️ *R:R :* `{sig['rr']}`\n\n"
         f"🔍 *Confluence ({sig['confluence']}/3) :*\n"
         f"{'  '.join(icons)}\n\n"
-        f"📈 *Biais HTF M15 :* {'Haussier 🟢' if sig['htf_bias'] == 'bullish' else 'Baissier 🔴'}\n"
+        f"📐 *Analyse Multi-TF :*\n"
+        f"  H4 {bias_icon} → M15 {bias_icon} → M5 ✅\n\n"
         f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
@@ -199,9 +227,11 @@ async def scan_all(bot):
                     await asyncio.sleep(0.3)
                     m15 = await fetch_candles(ws, symbol, 900, 30)
                     await asyncio.sleep(0.3)
-                    if not m5 or not m15:
+                    h4 = await fetch_candles(ws, symbol, 14400, 30)
+                    await asyncio.sleep(0.3)
+                    if not m5 or not m15 or not h4:
                         continue
-                    signal = analyze(symbol, m5, m15)
+                    signal = analyze(symbol, m5, m15, h4)
                     if signal:
                         await send_signal(bot, signal)
                 except Exception as e:
@@ -223,7 +253,7 @@ async def main():
             "✅ Bot démarré\n"
             f"📊 {len(INSTRUMENTS)} instruments surveillés\n"
             "⏱ Scan toutes les 5 minutes\n"
-            "🔍 SMC + CRT\n"
+            "🔍 SMC + CRT | H4 → M15 → M5\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
