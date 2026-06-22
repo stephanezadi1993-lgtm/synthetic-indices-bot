@@ -37,10 +37,15 @@ INSTRUMENT_NAMES = {
 }
 
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
+
+# Cooldown 4 heures par instrument + direction
+# key = (symbol, direction) -> timestamp
 last_signal_time = {}
+COOLDOWN_SECONDS = 4 * 3600
 
 FIBO_LOW = 0.618
 FIBO_HIGH = 0.709
+MIN_RR = 2.0
 
 
 def compute_ema(closes, period):
@@ -118,52 +123,72 @@ def fibo_zone(swing_high, swing_low, direction):
 
 
 def analyze(symbol, m5, h1, h4):
+    # Biais H4
     if len(h4) < 21:
         return None
     h4_bias = get_bias(h4)
     if h4_bias is None:
         return None
 
+    # Confirmation H1
     if len(h1) < 21:
         return None
     h1_bias = get_bias(h1)
     if h1_bias is None or h1_bias != h4_bias:
         return None
 
+    # Setup M5
     if len(m5) < 20:
         return None
 
     ob = detect_order_block(m5)
     fvg = detect_fvg(m5)
     crt = detect_crt(m5)
-
     confluence = sum(1 for s in [ob, fvg, crt] if s and s["type"] == h4_bias)
     if confluence < 2:
         return None
 
     current_price = m5[-1]["close"]
-    swing_high, swing_low = get_swing_points(m5)
-    price_range = swing_high - swing_low
-    if price_range == 0:
+
+    # Zone Fibo 61.8-70.9% sur M5
+    m5_high, m5_low = get_swing_points(m5)
+    m5_range = m5_high - m5_low
+    if m5_range == 0:
         return None
 
-    zone_low, zone_high = fibo_zone(swing_high, swing_low, h4_bias)
+    zone_low, zone_high = fibo_zone(m5_high, m5_low, h4_bias)
     if not (zone_low <= current_price <= zone_high):
         return None
 
+    # SL basé sur swing M5
     entry = current_price
     if h4_bias == "bullish":
-        sl = swing_low - price_range * 0.02
-        tp1 = entry + price_range * 0.382
-        tp2 = entry + price_range * 0.618
-        rr = (tp1 - entry) / (entry - sl) if (entry - sl) > 0 else 0
+        sl = m5_low - m5_range * 0.02
     else:
-        sl = swing_high + price_range * 0.02
-        tp1 = entry - price_range * 0.382
-        tp2 = entry - price_range * 0.618
-        rr = (entry - tp1) / (sl - entry) if (sl - entry) > 0 else 0
+        sl = m5_high + m5_range * 0.02
 
-    if rr < 1.5:
+    # TP basés sur swing H1 (cibles plus larges)
+    h1_high, h1_low = get_swing_points(h1, lookback=len(h1))
+    h1_range = h1_high - h1_low
+    if h1_range == 0:
+        return None
+
+    if h4_bias == "bullish":
+        tp1 = entry + h1_range * 0.618
+        tp2 = entry + h1_range * 1.0
+        sl_dist = entry - sl
+    else:
+        tp1 = entry - h1_range * 0.618
+        tp2 = entry - h1_range * 1.0
+        sl_dist = sl - entry
+
+    if sl_dist <= 0:
+        return None
+
+    rr1 = abs(tp1 - entry) / sl_dist
+    rr2 = abs(tp2 - entry) / sl_dist
+
+    if rr1 < MIN_RR:
         return None
 
     return {
@@ -171,7 +196,8 @@ def analyze(symbol, m5, h1, h4):
         "name": INSTRUMENT_NAMES.get(symbol, symbol),
         "direction": h4_bias,
         "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2,
-        "rr": round(rr, 2),
+        "rr1": round(rr1, 2),
+        "rr2": round(rr2, 2),
         "confluence": confluence,
         "ob": ob is not None and ob["type"] == h4_bias,
         "fvg": fvg is not None and fvg["type"] == h4_bias,
@@ -198,9 +224,8 @@ def format_signal(sig):
         f"{arrow}\n\n"
         f"🎯 *Entry :* `{p(sig['entry'])}`\n"
         f"🔻 *SL :* `{p(sig['sl'])}`\n"
-        f"✅ *TP1 :* `{p(sig['tp1'])}`\n"
-        f"🚀 *TP2 :* `{p(sig['tp2'])}`\n\n"
-        f"⚖️ *R:R :* `{sig['rr']}`\n\n"
+        f"✅ *TP1 :* `{p(sig['tp1'])}` _(R:R {sig['rr1']})_\n"
+        f"🚀 *TP2 :* `{p(sig['tp2'])}` _(R:R {sig['rr2']})_\n\n"
         f"📐 *Zone Fibo 61.8–70.9% :*\n"
         f"`{p(sig['fibo_low'])}` → `{p(sig['fibo_high'])}`\n\n"
         f"🔍 *Confluence ({sig['confluence']}/3) :*\n"
@@ -213,13 +238,13 @@ def format_signal(sig):
 
 
 async def send_signal(bot, signal):
-    key = signal["symbol"]
+    key = (signal["symbol"], signal["direction"])
     now = datetime.now(timezone.utc).timestamp()
-    if key in last_signal_time and now - last_signal_time[key] < 900:
+    if key in last_signal_time and now - last_signal_time[key] < COOLDOWN_SECONDS:
         return
     last_signal_time[key] = now
     await bot.send_message(chat_id=CHAT_ID, text=format_signal(signal), parse_mode=ParseMode.MARKDOWN)
-    logger.info(f"Signal sent: {signal['symbol']} {signal['direction']}")
+    logger.info(f"Signal sent: {signal['symbol']} {signal['direction']} RR1={signal['rr1']}")
 
 
 async def fetch_candles(ws, symbol, granularity, count=50):
@@ -275,6 +300,7 @@ async def main():
             "⏱ Scan toutes les 5 minutes\n"
             "🔍 OB + FVG + CRT | Fibo 61.8–70.9%\n"
             "📈 H4 → H1 → M5\n"
+            "⚖️ R:R minimum 2.0 | Cooldown 4h\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
