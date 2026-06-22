@@ -37,15 +37,13 @@ INSTRUMENT_NAMES = {
 }
 
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
-
-# Cooldown 4 heures par instrument + direction
-# key = (symbol, direction) -> timestamp
 last_signal_time = {}
 COOLDOWN_SECONDS = 4 * 3600
-
 FIBO_LOW = 0.618
 FIBO_HIGH = 0.709
 MIN_RR = 2.0
+ATR_PERIOD = 14
+ATR_MIN_MULTIPLIER = 0.5  # ATR doit être > 50% de la moyenne
 
 
 def compute_ema(closes, period):
@@ -66,18 +64,37 @@ def get_bias(candles, period=21):
     return "bullish" if closes[-1] > ema else "bearish"
 
 
+def compute_atr(candles, period=14):
+    if len(candles) < period + 1:
+        return None, None
+    trs = []
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i-1]["close"]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    if len(trs) < period:
+        return None, None
+    recent_trs = trs[-period:]
+    current_atr = sum(recent_trs) / period
+    avg_atr = sum(trs) / len(trs)
+    return current_atr, avg_atr
+
+
 def detect_order_block(candles):
+    """Returns OB with price levels for dynamic SL."""
     if len(candles) < 3:
         return None
     c1, c2, c3 = candles[-3], candles[-2], candles[-1]
     if c2["close"] < c2["open"] and c3["close"] > c3["open"]:
         body_ratio = (c3["close"] - c3["open"]) / (c3["high"] - c3["low"] + 1e-10)
         if body_ratio > 0.6:
-            return {"type": "bullish"}
+            return {"type": "bullish", "ob_high": c2["high"], "ob_low": c2["low"]}
     if c2["close"] > c2["open"] and c3["close"] < c3["open"]:
         body_ratio = (c3["open"] - c3["close"]) / (c3["high"] - c3["low"] + 1e-10)
         if body_ratio > 0.6:
-            return {"type": "bearish"}
+            return {"type": "bearish", "ob_high": c2["high"], "ob_low": c2["low"]}
     return None
 
 
@@ -86,9 +103,11 @@ def detect_fvg(candles):
         return None
     c1, c2, c3 = candles[-3], candles[-2], candles[-1]
     if c3["low"] > c1["high"]:
-        return {"type": "bullish"}
+        fvg_size = c3["low"] - c1["high"]
+        return {"type": "bullish", "size": fvg_size}
     if c3["high"] < c1["low"]:
-        return {"type": "bearish"}
+        fvg_size = c1["low"] - c3["high"]
+        return {"type": "bearish", "size": fvg_size}
     return None
 
 
@@ -99,10 +118,13 @@ def detect_crt(candles):
     c1_range = c1["high"] - c1["low"]
     if c1_range == 0:
         return None
+    # Mesure la force du CRT (% de récupération)
     if c2["low"] < c1["low"] and c3["close"] > (c1["low"] + c1_range * 0.5):
-        return {"type": "bullish"}
+        recovery = (c3["close"] - c1["low"]) / c1_range
+        return {"type": "bullish", "strength": round(recovery, 2)}
     if c2["high"] > c1["high"] and c3["close"] < (c1["high"] - c1_range * 0.5):
-        return {"type": "bearish"}
+        recovery = (c1["high"] - c3["close"]) / c1_range
+        return {"type": "bearish", "strength": round(recovery, 2)}
     return None
 
 
@@ -120,6 +142,39 @@ def fibo_zone(swing_high, swing_low, direction):
         zone_low = swing_low + price_range * FIBO_LOW
         zone_high = swing_low + price_range * FIBO_HIGH
     return zone_low, zone_high
+
+
+def compute_signal_score(ob, fvg, crt, h4_bias, atr_ratio):
+    """Score 1-5 basé sur la qualité des confluences."""
+    score = 0
+
+    # OB présent = +1
+    if ob and ob["type"] == h4_bias:
+        score += 1
+
+    # FVG présent, bonus si large
+    if fvg and fvg["type"] == h4_bias:
+        score += 1
+        if fvg.get("size", 0) > 0:
+            score += 0.5
+
+    # CRT présent, bonus si forte récupération
+    if crt and crt["type"] == h4_bias:
+        score += 1
+        if crt.get("strength", 0) > 0.75:
+            score += 0.5
+
+    # Bonus si ATR élevé (marché actif)
+    if atr_ratio and atr_ratio > 1.2:
+        score += 0.5
+
+    return min(5, round(score))
+
+
+def score_to_stars(score):
+    filled = "⭐" * score
+    empty = "☆" * (5 - score)
+    return filled + empty
 
 
 def analyze(symbol, m5, h1, h4):
@@ -141,9 +196,18 @@ def analyze(symbol, m5, h1, h4):
     if len(m5) < 20:
         return None
 
+    # Filtre ATR — marché pas trop plat
+    current_atr, avg_atr = compute_atr(m5, ATR_PERIOD)
+    if current_atr is None or avg_atr is None:
+        return None
+    if current_atr < avg_atr * ATR_MIN_MULTIPLIER:
+        return None
+    atr_ratio = current_atr / avg_atr if avg_atr > 0 else 1.0
+
     ob = detect_order_block(m5)
     fvg = detect_fvg(m5)
     crt = detect_crt(m5)
+
     confluence = sum(1 for s in [ob, fvg, crt] if s and s["type"] == h4_bias)
     if confluence < 2:
         return None
@@ -160,14 +224,20 @@ def analyze(symbol, m5, h1, h4):
     if not (zone_low <= current_price <= zone_high):
         return None
 
-    # SL basé sur swing M5
+    # SL dynamique basé sur l'OB si disponible, sinon swing M5
     entry = current_price
-    if h4_bias == "bullish":
-        sl = m5_low - m5_range * 0.02
+    if ob and ob["type"] == h4_bias:
+        if h4_bias == "bullish":
+            sl = ob["ob_low"] * 0.999  # Juste sous le bas de l'OB
+        else:
+            sl = ob["ob_high"] * 1.001  # Juste au-dessus du haut de l'OB
     else:
-        sl = m5_high + m5_range * 0.02
+        if h4_bias == "bullish":
+            sl = m5_low - m5_range * 0.02
+        else:
+            sl = m5_high + m5_range * 0.02
 
-    # TP basés sur swing H1 (cibles plus larges)
+    # TP basés sur swing H1
     h1_high, h1_low = get_swing_points(h1, lookback=len(h1))
     h1_range = h1_high - h1_low
     if h1_range == 0:
@@ -191,6 +261,8 @@ def analyze(symbol, m5, h1, h4):
     if rr1 < MIN_RR:
         return None
 
+    score = compute_signal_score(ob, fvg, crt, h4_bias, atr_ratio)
+
     return {
         "symbol": symbol,
         "name": INSTRUMENT_NAMES.get(symbol, symbol),
@@ -206,6 +278,8 @@ def analyze(symbol, m5, h1, h4):
         "h1_bias": h1_bias,
         "fibo_low": round(zone_low, 5),
         "fibo_high": round(zone_high, 5),
+        "score": score,
+        "atr_ratio": round(atr_ratio, 2),
     }
 
 
@@ -221,7 +295,8 @@ def format_signal(sig):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *{sig['name']}*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{arrow}\n\n"
+        f"{arrow}\n"
+        f"🏆 *Score :* {score_to_stars(sig['score'])} ({sig['score']}/5)\n\n"
         f"🎯 *Entry :* `{p(sig['entry'])}`\n"
         f"🔻 *SL :* `{p(sig['sl'])}`\n"
         f"✅ *TP1 :* `{p(sig['tp1'])}` _(R:R {sig['rr1']})_\n"
@@ -232,6 +307,7 @@ def format_signal(sig):
         f"{'  '.join(icons)}\n\n"
         f"📈 *Multi-TF :*\n"
         f"  H4 {bias_icon} → H1 {bias_icon} → M5 ✅\n\n"
+        f"📊 *ATR :* `{sig['atr_ratio']}x` moyenne\n"
         f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
@@ -244,7 +320,7 @@ async def send_signal(bot, signal):
         return
     last_signal_time[key] = now
     await bot.send_message(chat_id=CHAT_ID, text=format_signal(signal), parse_mode=ParseMode.MARKDOWN)
-    logger.info(f"Signal sent: {signal['symbol']} {signal['direction']} RR1={signal['rr1']}")
+    logger.info(f"Signal sent: {signal['symbol']} {signal['direction']} Score={signal['score']} RR1={signal['rr1']}")
 
 
 async def fetch_candles(ws, symbol, granularity, count=50):
@@ -300,7 +376,8 @@ async def main():
             "⏱ Scan toutes les 5 minutes\n"
             "🔍 OB + FVG + CRT | Fibo 61.8–70.9%\n"
             "📈 H4 → H1 → M5\n"
-            "⚖️ R:R minimum 2.0 | Cooldown 4h\n"
+            "⚖️ R:R min 2.0 | Cooldown 4h\n"
+            "🏆 Score qualité 1–5\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
