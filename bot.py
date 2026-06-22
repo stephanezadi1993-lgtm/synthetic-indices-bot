@@ -19,7 +19,6 @@ INSTRUMENTS = [
     "1HZ10V", "1HZ25V", "1HZ50V", "1HZ75V", "1HZ100V",
     "BOOM300N", "BOOM500", "BOOM600", "BOOM900", "BOOM1000",
     "CRASH300N", "CRASH500", "CRASH600", "CRASH900", "CRASH1000",
-    "STPIDX10",
     "JD10", "JD25", "JD50", "JD75", "JD100",
 ]
 
@@ -33,7 +32,6 @@ INSTRUMENT_NAMES = {
     "BOOM900": "Boom 900", "BOOM1000": "Boom 1000",
     "CRASH300N": "Crash 300", "CRASH500": "Crash 500", "CRASH600": "Crash 600",
     "CRASH900": "Crash 900", "CRASH1000": "Crash 1000",
-    "STPIDX10": "Step Index",
     "JD10": "Jump 10", "JD25": "Jump 25", "JD50": "Jump 50",
     "JD75": "Jump 75", "JD100": "Jump 100",
 }
@@ -93,13 +91,6 @@ def detect_crt(candles):
     return None
 
 
-def fibo_786(swing_high, swing_low, direction):
-    if direction == "bullish":
-        return swing_low + (swing_high - swing_low) * 0.214
-    else:
-        return swing_high - (swing_high - swing_low) * 0.214
-
-
 def get_swing_points(candles, lookback=20):
     subset = candles[-lookback:] if len(candles) >= lookback else candles
     return max(c["high"] for c in subset), min(c["low"] for c in subset)
@@ -121,11 +112,8 @@ def analyze(symbol, m5_candles, m15_candles):
         return None
     current_price = m5_candles[-1]["close"]
     swing_high, swing_low = get_swing_points(m5_candles)
-    fib_level = fibo_786(swing_high, swing_low, htf_bias)
     price_range = swing_high - swing_low
     if price_range == 0:
-        return None
-    if abs(current_price - fib_level) > price_range * 0.05:
         return None
     entry = current_price
     if htf_bias == "bullish":
@@ -147,7 +135,7 @@ def analyze(symbol, m5_candles, m15_candles):
         "ob": ob is not None and ob["type"] == htf_bias,
         "fvg": fvg is not None and fvg["type"] == htf_bias,
         "crt": crt is not None and crt["type"] == htf_bias,
-        "htf_bias": htf_bias, "fib_level": round(fib_level, 5),
+        "htf_bias": htf_bias,
     }
 
 
@@ -167,7 +155,6 @@ def format_signal(sig):
         f"🔻 *SL :* `{p(sig['sl'])}`\n"
         f"✅ *TP1 :* `{p(sig['tp1'])}`\n"
         f"🚀 *TP2 :* `{p(sig['tp2'])}`\n\n"
-        f"📐 *Fibo 78.6% :* `{p(sig['fib_level'])}`\n"
         f"⚖️ *R:R :* `{sig['rr']}`\n\n"
         f"🔍 *Confluence ({sig['confluence']}/3) :*\n"
         f"{'  '.join(icons)}\n\n"
@@ -236,7 +223,7 @@ async def main():
             "✅ Bot démarré\n"
             f"📊 {len(INSTRUMENTS)} instruments surveillés\n"
             "⏱ Scan toutes les 5 minutes\n"
-            "🔍 SMC + CRT + Fibo 78.6%\n"
+            "🔍 SMC + CRT\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
