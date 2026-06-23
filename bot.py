@@ -269,12 +269,16 @@ def format_signal(sig):
 async def fetch_current_price(symbol):
     try:
         async with websockets.connect(DERIV_WS_URL, ping_interval=20) as ws:
-            req = {"ticks": symbol, "subscribe": 0}
+            req = {"ticks_history": symbol, "adjust_start_time": 1,
+                   "count": 1, "end": "latest", "granularity": 60, "style": "candles"}
             await ws.send(json.dumps(req))
             while True:
                 resp = json.loads(await ws.recv())
-                if resp.get("msg_type") == "tick":
-                    return float(resp["tick"]["quote"])
+                if resp.get("msg_type") == "candles":
+                    candles = resp.get("candles", [])
+                    if candles:
+                        return float(candles[-1]["close"])
+                    return None
                 if "error" in resp:
                     return None
     except Exception:
