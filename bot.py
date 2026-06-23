@@ -1,53 +1,63 @@
+"""
+Deriv Synthetic Signal Bot
+Basé sur Multi-Asset Bot v5
+25 instruments synthétiques Deriv
+Zone 61.8-70.9% + FVG + OB
+"""
+import os
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
-
 import websockets
 from telegram import Bot
 from telegram.constants import ParseMode
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
-
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
+CHECK_INTERVAL = 300
 
-INSTRUMENTS = [
-    "R_10", "R_25", "R_50", "R_75", "R_100",
-    "1HZ10V", "1HZ25V", "1HZ50V", "1HZ75V", "1HZ100V",
-    "BOOM300N", "BOOM500", "BOOM600", "BOOM900", "BOOM1000",
-    "CRASH300N", "CRASH500", "CRASH600", "CRASH900", "CRASH1000",
-    "JD10", "JD25", "JD50", "JD75", "JD100",
-]
-
-INSTRUMENT_NAMES = {
-    "R_10": "Volatility 10", "R_25": "Volatility 25", "R_50": "Volatility 50",
-    "R_75": "Volatility 75", "R_100": "Volatility 100",
-    "1HZ10V": "Volatility 10 (1s)", "1HZ25V": "Volatility 25 (1s)",
-    "1HZ50V": "Volatility 50 (1s)", "1HZ75V": "Volatility 75 (1s)",
-    "1HZ100V": "Volatility 100 (1s)",
-    "BOOM300N": "Boom 300", "BOOM500": "Boom 500", "BOOM600": "Boom 600",
-    "BOOM900": "Boom 900", "BOOM1000": "Boom 1000",
-    "CRASH300N": "Crash 300", "CRASH500": "Crash 500", "CRASH600": "Crash 600",
-    "CRASH900": "Crash 900", "CRASH1000": "Crash 1000",
-    "JD10": "Jump 10", "JD25": "Jump 25", "JD50": "Jump 50",
-    "JD75": "Jump 75", "JD100": "Jump 100",
+INSTRUMENTS = {
+    "R_10":    {"name": "Volatility 10",      "emoji": "📊", "min_range": 0.5},
+    "R_25":    {"name": "Volatility 25",      "emoji": "📊", "min_range": 1.0},
+    "R_50":    {"name": "Volatility 50",      "emoji": "📊", "min_range": 2.0},
+    "R_75":    {"name": "Volatility 75",      "emoji": "📊", "min_range": 3.0},
+    "R_100":   {"name": "Volatility 100",     "emoji": "📊", "min_range": 5.0},
+    "1HZ10V":  {"name": "Volatility 10 (1s)", "emoji": "⚡", "min_range": 0.5},
+    "1HZ25V":  {"name": "Volatility 25 (1s)", "emoji": "⚡", "min_range": 1.0},
+    "1HZ50V":  {"name": "Volatility 50 (1s)", "emoji": "⚡", "min_range": 2.0},
+    "1HZ75V":  {"name": "Volatility 75 (1s)", "emoji": "⚡", "min_range": 3.0},
+    "1HZ100V": {"name": "Volatility 100 (1s)","emoji": "⚡", "min_range": 5.0},
+    "BOOM300N":{"name": "Boom 300",           "emoji": "🚀", "min_range": 10.0},
+    "BOOM500": {"name": "Boom 500",           "emoji": "🚀", "min_range": 10.0},
+    "BOOM600": {"name": "Boom 600",           "emoji": "🚀", "min_range": 10.0},
+    "BOOM900": {"name": "Boom 900",           "emoji": "🚀", "min_range": 10.0},
+    "BOOM1000":{"name": "Boom 1000",          "emoji": "🚀", "min_range": 10.0},
+    "CRASH300N":{"name": "Crash 300",         "emoji": "💥", "min_range": 10.0},
+    "CRASH500":{"name": "Crash 500",          "emoji": "💥", "min_range": 10.0},
+    "CRASH600":{"name": "Crash 600",          "emoji": "💥", "min_range": 10.0},
+    "CRASH900":{"name": "Crash 900",          "emoji": "💥", "min_range": 10.0},
+    "CRASH1000":{"name": "Crash 1000",        "emoji": "💥", "min_range": 10.0},
+    "JD10":    {"name": "Jump 10",            "emoji": "🦘", "min_range": 5.0},
+    "JD25":    {"name": "Jump 25",            "emoji": "🦘", "min_range": 10.0},
+    "JD50":    {"name": "Jump 50",            "emoji": "🦘", "min_range": 20.0},
+    "JD75":    {"name": "Jump 75",            "emoji": "🦘", "min_range": 30.0},
+    "JD100":   {"name": "Jump 100",           "emoji": "🦘", "min_range": 50.0},
 }
 
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
-last_signal_time = {}
-COOLDOWN_SECONDS = 4 * 3600
-FIBO_LOW = 0.618
-FIBO_HIGH = 0.709
+FIB_LEVELS = [0.618, 0.709]
+TOLERANCE_PCT = 0.50
+MIN_SCORE = 4
 MIN_RR = 2.0
-ATR_PERIOD = 14
-ATR_MIN_MULTIPLIER = 0.5
-pending_signals = {}
-FOLLOW_UP_DELAY = 1800
-MIN_SCORE = 3
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger(__name__)
+
+active_signals = {}
+
+
+# ─────────────────────────── ANALYSIS ───────────────────────────
 
 def compute_ema(closes, period):
     if len(closes) < period:
@@ -59,101 +69,75 @@ def compute_ema(closes, period):
     return ema
 
 
-def get_bias(candles, period=21):
+def get_trend(candles):
+    if not candles or len(candles) < 5:
+        return "neutral"
     closes = [c["close"] for c in candles]
-    ema = compute_ema(closes, period)
-    if ema is None:
+    ema21 = compute_ema(closes, 21)
+    if ema21 is None:
+        return "neutral"
+    return "bull" if closes[-1] > ema21 else "bear"
+
+
+def get_structure(candles):
+    if not candles or len(candles) < 3:
+        return "neutral"
+    bull = sum(1 for c in candles[:3] if c["close"] > c["open"])
+    return "bull" if bull >= 2 else "bear"
+
+
+def detect_swing(candles, min_range):
+    if len(candles) < 10:
         return None
-    return "bullish" if closes[-1] > ema else "bearish"
+    h = max(c["high"] for c in candles)
+    l = min(c["low"] for c in candles)
+    if h - l < min_range:
+        return None
+    return h, l
 
 
-def compute_atr(candles, period=14):
-    if len(candles) < period + 1:
-        return None, None
-    trs = []
-    for i in range(1, len(candles)):
-        high = candles[i]["high"]
-        low = candles[i]["low"]
-        prev_close = candles[i-1]["close"]
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        trs.append(tr)
-    if len(trs) < period:
-        return None, None
-    current_atr = sum(trs[-period:]) / period
-    avg_atr = sum(trs) / len(trs)
-    return current_atr, avg_atr
-
-
-def detect_order_block(candles):
+def detect_fvg(candles, direction, zh, zl):
+    fvgs = []
     if len(candles) < 3:
-        return None
-    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
-    if c2["close"] < c2["open"] and c3["close"] > c3["open"]:
-        body_ratio = (c3["close"] - c3["open"]) / (c3["high"] - c3["low"] + 1e-10)
-        if body_ratio > 0.6:
-            return {"type": "bullish", "ob_high": c2["high"], "ob_low": c2["low"]}
-    if c2["close"] > c2["open"] and c3["close"] < c3["open"]:
-        body_ratio = (c3["open"] - c3["close"]) / (c3["high"] - c3["low"] + 1e-10)
-        if body_ratio > 0.6:
-            return {"type": "bearish", "ob_high": c2["high"], "ob_low": c2["low"]}
-    return None
+        return fvgs
+    for i in range(len(candles) - 2):
+        c0, c2 = candles[i+2], candles[i]
+        if direction == "bull" and c2["low"] > c0["high"]:
+            mid = (c2["low"] + c0["high"]) / 2
+            if zl <= mid <= zh:
+                fvgs.append({"type": "Bull FVG", "top": round(c2["low"], 5), "bot": round(c0["high"], 5)})
+        elif direction == "bear" and c2["high"] < c0["low"]:
+            mid = (c2["high"] + c0["low"]) / 2
+            if zl <= mid <= zh:
+                fvgs.append({"type": "Bear FVG", "top": round(c0["low"], 5), "bot": round(c2["high"], 5)})
+    return fvgs[-2:] if fvgs else []
 
 
-def detect_fvg(candles):
-    if len(candles) < 3:
-        return None
-    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
-    if c3["low"] > c1["high"]:
-        return {"type": "bullish", "size": c3["low"] - c1["high"]}
-    if c3["high"] < c1["low"]:
-        return {"type": "bearish", "size": c1["low"] - c3["high"]}
-    return None
+def detect_ob(candles, direction, zh, zl):
+    obs = []
+    if len(candles) < 4:
+        return obs
+    for i in range(1, len(candles) - 2):
+        ob, nxt = candles[i], candles[i-1]
+        if abs(ob["close"] - ob["open"]) < 1e-10:
+            continue
+        in_zone = zl <= ob["low"] <= zh or zl <= ob["high"] <= zh
+        if not in_zone:
+            continue
+        if direction == "bull" and ob["close"] < ob["open"] and nxt["close"] > ob["high"]:
+            obs.append({"type": "Bull OB", "top": round(ob["high"], 5), "bot": round(ob["low"], 5)})
+        elif direction == "bear" and ob["close"] > ob["open"] and nxt["close"] < ob["low"]:
+            obs.append({"type": "Bear OB", "top": round(ob["high"], 5), "bot": round(ob["low"], 5)})
+    return obs[-2:] if obs else []
 
 
-def detect_crt(candles):
-    if len(candles) < 3:
-        return None
-    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
-    c1_range = c1["high"] - c1["low"]
-    if c1_range == 0:
-        return None
-    if c2["low"] < c1["low"] and c3["close"] > (c1["low"] + c1_range * 0.5):
-        return {"type": "bullish", "strength": round((c3["close"] - c1["low"]) / c1_range, 2)}
-    if c2["high"] > c1["high"] and c3["close"] < (c1["high"] - c1_range * 0.5):
-        return {"type": "bearish", "strength": round((c1["high"] - c3["close"]) / c1_range, 2)}
-    return None
-
-
-def get_swing_points(candles, lookback=20):
-    subset = candles[-lookback:] if len(candles) >= lookback else candles
-    return max(c["high"] for c in subset), min(c["low"] for c in subset)
-
-
-def fibo_zone(swing_high, swing_low, direction):
-    price_range = swing_high - swing_low
-    if direction == "bullish":
-        zone_high = swing_high - price_range * FIBO_LOW
-        zone_low = swing_high - price_range * FIBO_HIGH
-    else:
-        zone_low = swing_low + price_range * FIBO_LOW
-        zone_high = swing_low + price_range * FIBO_HIGH
-    return zone_low, zone_high
-
-
-def compute_signal_score(ob, fvg, crt, h4_bias, atr_ratio):
+def compute_score(obs, fvgs, h4_trend, h1_struct, atr_ratio):
     score = 0
-    if ob and ob["type"] == h4_bias:
-        score += 1
-    if fvg and fvg["type"] == h4_bias:
-        score += 1
-        if fvg.get("size", 0) > 0:
-            score += 0.5
-    if crt and crt["type"] == h4_bias:
-        score += 1
-        if crt.get("strength", 0) > 0.75:
-            score += 0.5
-    if atr_ratio and atr_ratio > 1.2:
-        score += 0.5
+    if obs: score += 1
+    if fvgs: score += 1
+    if obs and fvgs: score += 1
+    if h4_trend == h1_struct: score += 0.5
+    if atr_ratio and atr_ratio > 1.2: score += 0.5
     return min(5, round(score))
 
 
@@ -161,115 +145,160 @@ def score_to_stars(score):
     return "⭐" * score + "☆" * (5 - score)
 
 
-def analyze(symbol, m5, h1, h4):
-    if len(h4) < 21:
+def detect_setup(symbol, price, m5, h1, h4, min_range, name, emoji):
+    swing = detect_swing(m5, min_range)
+    if not swing:
         return None
-    h4_bias = get_bias(h4)
-    if h4_bias is None:
-        return None
-    if len(h1) < 21:
-        return None
-    h1_bias = get_bias(h1)
-    if h1_bias is None or h1_bias != h4_bias:
-        return None
-    if len(m5) < 20:
-        return None
-    current_atr, avg_atr = compute_atr(m5, ATR_PERIOD)
-    if current_atr is None or avg_atr is None:
-        return None
-    if current_atr < avg_atr * ATR_MIN_MULTIPLIER:
-        return None
-    atr_ratio = current_atr / avg_atr if avg_atr > 0 else 1.0
-    ob = detect_order_block(m5)
-    fvg = detect_fvg(m5)
-    crt = detect_crt(m5)
-    confluence = sum(1 for s in [ob, fvg, crt] if s and s["type"] == h4_bias)
-    if confluence < 2:
-        return None
-    current_price = m5[-1]["close"]
-    m5_high, m5_low = get_swing_points(m5)
-    m5_range = m5_high - m5_low
-    if m5_range == 0:
-        return None
-    zone_low, zone_high = fibo_zone(m5_high, m5_low, h4_bias)
-    if not (zone_low <= current_price <= zone_high):
-        return None
-    entry = current_price
-    if ob and ob["type"] == h4_bias:
-        sl = ob["ob_low"] * 0.999 if h4_bias == "bullish" else ob["ob_high"] * 1.001
-    else:
-        sl = m5_low - m5_range * 0.02 if h4_bias == "bullish" else m5_high + m5_range * 0.02
-    h1_high, h1_low = get_swing_points(h1, lookback=len(h1))
-    h1_range = h1_high - h1_low
-    if h1_range == 0:
-        return None
-    if h4_bias == "bullish":
-        tp1 = entry + h1_range * 0.618
-        tp2 = entry + h1_range * 1.0
-        sl_dist = entry - sl
-    else:
-        tp1 = entry - h1_range * 0.618
-        tp2 = entry - h1_range * 1.0
-        sl_dist = sl - entry
-    if sl_dist <= 0:
-        return None
-    rr1 = abs(tp1 - entry) / sl_dist
-    rr2 = abs(tp2 - entry) / sl_dist
-    if rr1 < MIN_RR:
-        return None
-    score = compute_signal_score(ob, fvg, crt, h4_bias, atr_ratio)
-    return {
-        "symbol": symbol,
-        "name": INSTRUMENT_NAMES.get(symbol, symbol),
-        "direction": h4_bias,
-        "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2,
-        "rr1": round(rr1, 2), "rr2": round(rr2, 2),
-        "confluence": confluence,
-        "ob": ob is not None and ob["type"] == h4_bias,
-        "fvg": fvg is not None and fvg["type"] == h4_bias,
-        "crt": crt is not None and crt["type"] == h4_bias,
-        "h4_bias": h4_bias, "h1_bias": h1_bias,
-        "swing_high": round(m5_high, 5),
-        "swing_low": round(m5_low, 5),
-        "fibo_low": round(zone_low, 5),
-        "fibo_high": round(zone_high, 5),
-        "score": score,
-        "atr_ratio": round(atr_ratio, 2),
-    }
+    high, low = swing
+    rng = high - low
+
+    h4_trend = get_trend(h4) if h4 else get_trend(m5)
+    h1_struct = get_structure(h1) if h1 else "neutral"
+    direction = h4_trend
+    if direction == "neutral":
+        direction = "bull" if m5[0]["close"] > m5[-1]["close"] else "bear"
+
+    tol = rng * TOLERANCE_PCT / 100
+
+    for ratio in FIB_LEVELS:
+        if direction == "bull":
+            level = round(high - rng * ratio, 5)
+        else:
+            level = round(low + rng * ratio, 5)
+
+        if abs(price - level) > tol:
+            continue
+
+        zh = level + rng * 0.01
+        zl = level - rng * 0.01
+
+        fvgs = detect_fvg(m5, direction, zh, zl)
+        obs = detect_ob(m5, direction, zh, zl)
+        confluence = (1 if fvgs else 0) + (1 if obs else 0)
+
+        if confluence < 1:
+            continue
+
+        # ATR
+        trs = []
+        for i in range(1, len(m5)):
+            tr = max(m5[i]["high"] - m5[i]["low"],
+                     abs(m5[i]["high"] - m5[i-1]["close"]),
+                     abs(m5[i]["low"] - m5[i-1]["close"]))
+            trs.append(tr)
+        atr_ratio = None
+        if len(trs) >= 14:
+            current_atr = sum(trs[-14:]) / 14
+            avg_atr = sum(trs) / len(trs)
+            atr_ratio = round(current_atr / avg_atr, 2) if avg_atr > 0 else None
+
+        score = compute_score(obs, fvgs, h4_trend, h1_struct, atr_ratio)
+        if score < MIN_SCORE:
+            continue
+
+        sd = rng * 0.05
+        t1d = rng * 0.382
+        t2d = rng * 0.618
+
+        if direction == "bull":
+            sl = round(level - sd, 5)
+            tp1 = round(level + t1d, 5)
+            tp2 = round(level + t2d, 5)
+            bias = "BUY"
+            sig_emoji = "🟢"
+        else:
+            sl = round(level + sd, 5)
+            tp1 = round(level - t1d, 5)
+            tp2 = round(level - t2d, 5)
+            bias = "SELL"
+            sig_emoji = "🔴"
+
+        sl_dist = abs(level - sl)
+        if sl_dist == 0:
+            continue
+        rr1 = round(abs(tp1 - level) / sl_dist, 1)
+        rr2 = round(abs(tp2 - level) / sl_dist, 1)
+
+        if rr1 < MIN_RR:
+            continue
+
+        return {
+            "symbol": symbol,
+            "name": name,
+            "asset_emoji": emoji,
+            "direction": direction,
+            "bias": bias,
+            "emoji": sig_emoji,
+            "fib_label": f"{int(ratio*1000)/10}%",
+            "price": round(price, 5),
+            "entry": level,
+            "sl": sl, "tp1": tp1, "tp2": tp2,
+            "rr1": rr1, "rr2": rr2,
+            "swing_high": round(high, 5),
+            "swing_low": round(low, 5),
+            "h4": h4_trend.upper(),
+            "h1": h1_struct.upper(),
+            "fvgs": fvgs,
+            "obs": obs,
+            "confluence": confluence,
+            "score": score,
+            "atr_ratio": atr_ratio,
+            "zh": round(zh, 5),
+            "zl": round(zl, 5),
+        }
+
+    return None
 
 
-def format_signal(sig):
-    arrow = "🟢 BUY" if sig["direction"] == "bullish" else "🔴 SELL"
-    bias_icon = "🟢" if sig["h4_bias"] == "bullish" else "🔴"
-    icons = []
-    if sig["ob"]: icons.append("🧱 OB")
-    if sig["fvg"]: icons.append("🌫 FVG")
-    if sig["crt"]: icons.append("🔄 CRT")
+def format_signal(s):
+    dl = "LONG" if s["direction"] == "bull" else "SHORT"
+    stars = score_to_stars(s["score"])
+    cl = {1: "Bonne confluence", 2: "Confluence maximale ✅"}.get(s["confluence"], "Signal")
+    fvg_txt = f"\n├ {s['fvgs'][-1]['type']}: `{s['fvgs'][-1]['bot']}`–`{s['fvgs'][-1]['top']}`" if s["fvgs"] else ""
+    ob_txt = f"\n├ {s['obs'][-1]['type']}: `{s['obs'][-1]['bot']}`–`{s['obs'][-1]['top']}`" if s["obs"] else ""
     p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
+    now = datetime.now(timezone.utc).strftime("%H:%M UTC")
     return (
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 *{sig['name']}*\n"
+        f"{s['emoji']} *SIGNAL {s['name']} — {s['bias']}* {s['asset_emoji']}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{arrow}\n"
-        f"🏆 *Score :* {score_to_stars(sig['score'])} ({sig['score']}/5)\n\n"
-        f"🎯 *Entry :* `{p(sig['entry'])}`\n"
-        f"🔻 *SL :* `{p(sig['sl'])}`\n"
-        f"✅ *TP1 :* `{p(sig['tp1'])}` _(R:R {sig['rr1']})_\n"
-        f"🚀 *TP2 :* `{p(sig['tp2'])}` _(R:R {sig['rr2']})_\n\n"
-        f"📏 *Swing M5 (base Fibo) :*\n"
-        f"  🔼 High : `{p(sig['swing_high'])}`\n"
-        f"  🔽 Low : `{p(sig['swing_low'])}`\n\n"
-        f"📐 *Zone Fibo 61.8–70.9% :*\n"
-        f"  🔼 High : `{p(sig['fibo_high'])}`\n"
-        f"  🔽 Low : `{p(sig['fibo_low'])}`\n\n"
-        f"🔍 *Confluence ({sig['confluence']}/3) :*\n"
-        f"{'  '.join(icons)}\n\n"
-        f"📈 *Multi-TF :*\n"
-        f"  H4 {bias_icon} → H1 {bias_icon} → M5 ✅\n\n"
-        f"📊 *ATR :* `{sig['atr_ratio']}x` moyenne\n"
-        f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
+        f"🏆 *Score :* {stars} ({s['score']}/5)\n"
+        f"⏰ `{now}`\n\n"
+        f"📐 *Zone Fibo {s['fib_label']}*\n"
+        f"├ Zone : `{p(s['zl'])}`–`{p(s['zh'])}`\n"
+        f"├ 🔼 Swing High : `{p(s['swing_high'])}`\n"
+        f"└ 🔽 Swing Low : `{p(s['swing_low'])}`\n\n"
+        f"📈 *Multi-TF*\n"
+        f"├ H4 : *{s['h4']}*\n"
+        f"└ H1 : *{s['h1']}*\n\n"
+        f"🔍 *Confluence SMC* {stars}\n"
+        f"├ {cl}{ob_txt}{fvg_txt}\n"
+        f"└ Zone {s['fib_label']} ✅\n\n"
+        f"🎯 *ORDRE {dl}*\n"
+        f"├ Entrée : `{p(s['entry'])}`\n"
+        f"├ SL : `{p(s['sl'])}` 🛑\n"
+        f"├ TP1 : `{p(s['tp1'])}` ✅ R:R 1:{s['rr1']}\n"
+        f"└ TP2 : `{p(s['tp2'])}` 🚀 R:R 1:{s['rr2']}\n\n"
+        f"📊 *ATR :* `{s['atr_ratio']}x` moyenne\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
+
+
+# ─────────────────────────── DERIV WS ───────────────────────────
+
+async def fetch_candles(ws, symbol, granularity, count=60):
+    req = {"ticks_history": symbol, "adjust_start_time": 1, "count": count,
+           "end": "latest", "granularity": granularity, "style": "candles"}
+    await ws.send(json.dumps(req))
+    while True:
+        resp = json.loads(await ws.recv())
+        if resp.get("msg_type") == "candles":
+            return [{"open": float(c["open"]), "high": float(c["high"]),
+                     "low": float(c["low"]), "close": float(c["close"]),
+                     "epoch": c["epoch"]} for c in resp.get("candles", [])]
+        if "error" in resp:
+            log.warning(f"Deriv error {symbol}: {resp['error']}")
+            return []
 
 
 async def fetch_current_price(symbol):
@@ -282,128 +311,93 @@ async def fetch_current_price(symbol):
                 resp = json.loads(await ws.recv())
                 if resp.get("msg_type") == "candles":
                     candles = resp.get("candles", [])
-                    if candles:
-                        return float(candles[-1]["close"])
-                    return None
+                    return float(candles[-1]["close"]) if candles else None
                 if "error" in resp:
                     return None
     except Exception:
         return None
 
 
-async def check_follow_ups(bot):
-    now = datetime.now(timezone.utc).timestamp()
+# ─────────────────────────── SUIVI TP/SL ───────────────────────────
+
+async def check_active_signals(bot):
     to_remove = []
-    for key, pending in list(pending_signals.items()):
-        signal = pending["signal"]
-        sent_at = pending["sent_at"]
-        if now - sent_at < FOLLOW_UP_DELAY:
-            continue
-        current_price = await fetch_current_price(signal["symbol"])
+    for symbol, data in list(active_signals.items()):
+        sig = data["signal"]
+        current_price = await fetch_current_price(symbol)
         if current_price is None:
-            to_remove.append(key)
             continue
-        direction = signal["direction"]
-        entry = signal["entry"]
-        sl = signal["sl"]
-        tp1 = signal["tp1"]
-        tp2 = signal["tp2"]
+
+        direction = sig["direction"]
+        tp1, tp2, sl = sig["tp1"], sig["tp2"], sig["sl"]
         p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
-        if direction == "bullish":
-            if current_price >= tp2:
-                result = "tp2"
-            elif current_price >= tp1:
-                result = "tp1"
-            elif current_price <= sl:
-                result = "sl"
-            else:
-                result = "open"
+
+        result = None
+        if direction == "bull":
+            if current_price >= tp2: result = ("tp2", "🚀", "TP2 ATTEINT")
+            elif current_price >= tp1: result = ("tp1", "✅", "TP1 ATTEINT")
+            elif current_price <= sl: result = ("sl", "❌", "SL TOUCHÉ")
         else:
-            if current_price <= tp2:
-                result = "tp2"
-            elif current_price <= tp1:
-                result = "tp1"
-            elif current_price >= sl:
-                result = "sl"
-            else:
-                result = "open"
-        if result == "tp2":
-            emoji, label = "🚀", "TP2 ATTEINT"
-        elif result == "tp1":
-            emoji, label = "✅", "TP1 ATTEINT"
-        elif result == "sl":
-            emoji, label = "❌", "SL TOUCHÉ"
-        else:
-            emoji, label = "⏳", "EN COURS"
-        msg = (
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{emoji} *Suivi — {signal['name']}*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"*Résultat :* {label}\n\n"
-            f"Prix actuel : `{p(current_price)}`\n"
-            f"Entry : `{p(entry)}`\n"
-            f"SL : `{p(sl)}` | TP1 : `{p(tp1)}` | TP2 : `{p(tp2)}`\n"
-            f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
-            f"━━━━━━━━━━━━━━━━━━━━"
-        )
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-        logger.info(f"Follow-up: {signal['symbol']} → {label}")
-        to_remove.append(key)
-    for key in to_remove:
-        pending_signals.pop(key, None)
+            if current_price <= tp2: result = ("tp2", "🚀", "TP2 ATTEINT")
+            elif current_price <= tp1: result = ("tp1", "✅", "TP1 ATTEINT")
+            elif current_price >= sl: result = ("sl", "❌", "SL TOUCHÉ")
+
+        if result:
+            _, emoji, label = result
+            msg = (
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{emoji} *Suivi — {sig['name']}*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"*Résultat :* {label}\n\n"
+                f"Prix actuel : `{p(current_price)}`\n"
+                f"Entry : `{p(sig['entry'])}`\n"
+                f"SL : `{p(sl)}` | TP1 : `{p(tp1)}` | TP2 : `{p(tp2)}`\n"
+                f"⏰ `{datetime.now(timezone.utc).strftime('%H:%M UTC')}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━"
+            )
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+            log.info(f"Suivi {symbol} → {label}")
+            to_remove.append(symbol)
+
+    for symbol in to_remove:
+        active_signals.pop(symbol, None)
 
 
-async def send_signal(bot, signal):
-    if signal["score"] < MIN_SCORE:
-        return
-    key = (signal["symbol"], signal["direction"])
-    now = datetime.now(timezone.utc).timestamp()
-    if key in last_signal_time and now - last_signal_time[key] < COOLDOWN_SECONDS:
-        return
-    last_signal_time[key] = now
-    await bot.send_message(chat_id=CHAT_ID, text=format_signal(signal), parse_mode=ParseMode.MARKDOWN)
-    pending_signals[signal["symbol"]] = {"signal": signal, "sent_at": now}
-    logger.info(f"Signal: {signal['symbol']} {signal['direction']} Score={signal['score']}")
-
-
-async def fetch_candles(ws, symbol, granularity, count=50):
-    req = {"ticks_history": symbol, "adjust_start_time": 1, "count": count,
-           "end": "latest", "granularity": granularity, "style": "candles"}
-    await ws.send(json.dumps(req))
-    while True:
-        resp = json.loads(await ws.recv())
-        if resp.get("msg_type") == "candles":
-            return [{"open": float(c["open"]), "high": float(c["high"]),
-                     "low": float(c["low"]), "close": float(c["close"]),
-                     "epoch": c["epoch"]} for c in resp.get("candles", [])]
-        if "error" in resp:
-            logger.warning(f"Deriv error {symbol}: {resp['error']}")
-            return []
-
+# ─────────────────────────── MAIN LOOP ───────────────────────────
 
 async def scan_all(bot):
-    logger.info("Starting scan...")
-    await check_follow_ups(bot)
+    log.info("Starting scan...")
+    await check_active_signals(bot)
     try:
         async with websockets.connect(DERIV_WS_URL, ping_interval=20) as ws:
-            for symbol in INSTRUMENTS:
+            for symbol, cfg in INSTRUMENTS.items():
                 try:
-                    m5 = await fetch_candles(ws, symbol, 300, 50)
+                    m5 = await fetch_candles(ws, symbol, 300, 60)
                     await asyncio.sleep(0.3)
                     h1 = await fetch_candles(ws, symbol, 3600, 30)
                     await asyncio.sleep(0.3)
                     h4 = await fetch_candles(ws, symbol, 14400, 30)
                     await asyncio.sleep(0.3)
-                    if not m5 or not h1 or not h4:
+                    if not m5:
                         continue
-                    signal = analyze(symbol, m5, h1, h4)
-                    if signal:
-                        await send_signal(bot, signal)
+                    price = m5[-1]["close"]
+                    setup = detect_setup(
+                        symbol, price, m5, h1 or [], h4 or [],
+                        cfg["min_range"], cfg["name"], cfg["emoji"]
+                    )
+                    if setup:
+                        await bot.send_message(
+                            chat_id=CHAT_ID,
+                            text=format_signal(setup),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        active_signals[symbol] = {"signal": setup}
+                        log.info(f"Signal: {symbol} {setup['bias']} Score={setup['score']}")
                 except Exception as e:
-                    logger.error(f"Error {symbol}: {e}")
+                    log.error(f"Error {symbol}: {e}")
     except Exception as e:
-        logger.error(f"WS error: {e}")
-    logger.info("Scan complete.")
+        log.error(f"WS error: {e}")
+    log.info("Scan complete.")
 
 
 async def main():
@@ -418,18 +412,17 @@ async def main():
             "✅ Bot démarré\n"
             f"📊 {len(INSTRUMENTS)} instruments surveillés\n"
             "⏱ Scan toutes les 5 minutes\n"
-            "🔍 OB + FVG + CRT | Fibo 61.8–70.9%\n"
+            "🔍 OB + FVG | Fibo 61.8–70.9%\n"
             "📈 H4 → H1 → M5\n"
-            "⚖️ R:R min 2.0 | Cooldown 4h\n"
-            f"🏆 Score minimum {MIN_SCORE}/5\n"
-            "📬 Suivi résultat après 30 min\n"
+            f"⚖️ R:R min {MIN_RR} | Score min {MIN_SCORE}/5\n"
+            "📬 Suivi TP/SL en temps réel\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
     )
     while True:
         await scan_all(bot)
-        await asyncio.sleep(300)
+        await asyncio.sleep(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
