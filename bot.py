@@ -46,6 +46,7 @@ ATR_PERIOD = 14
 ATR_MIN_MULTIPLIER = 0.5
 pending_signals = {}
 FOLLOW_UP_DELAY = 1800
+MIN_SCORE = 3
 
 
 def compute_ema(closes, period):
@@ -228,6 +229,8 @@ def analyze(symbol, m5, h1, h4):
         "fvg": fvg is not None and fvg["type"] == h4_bias,
         "crt": crt is not None and crt["type"] == h4_bias,
         "h4_bias": h4_bias, "h1_bias": h1_bias,
+        "swing_high": round(m5_high, 5),
+        "swing_low": round(m5_low, 5),
         "fibo_low": round(zone_low, 5),
         "fibo_high": round(zone_high, 5),
         "score": score,
@@ -253,6 +256,9 @@ def format_signal(sig):
         f"🔻 *SL :* `{p(sig['sl'])}`\n"
         f"✅ *TP1 :* `{p(sig['tp1'])}` _(R:R {sig['rr1']})_\n"
         f"🚀 *TP2 :* `{p(sig['tp2'])}` _(R:R {sig['rr2']})_\n\n"
+        f"📏 *Swing M5 (base Fibo) :*\n"
+        f"  🔼 High : `{p(sig['swing_high'])}`\n"
+        f"  🔽 Low : `{p(sig['swing_low'])}`\n\n"
         f"📐 *Zone Fibo 61.8–70.9% :*\n"
         f"  🔼 High : `{p(sig['fibo_high'])}`\n"
         f"  🔽 Low : `{p(sig['fibo_low'])}`\n\n"
@@ -348,6 +354,8 @@ async def check_follow_ups(bot):
 
 
 async def send_signal(bot, signal):
+    if signal["score"] < MIN_SCORE:
+        return
     key = (signal["symbol"], signal["direction"])
     now = datetime.now(timezone.utc).timestamp()
     if key in last_signal_time and now - last_signal_time[key] < COOLDOWN_SECONDS:
@@ -413,7 +421,7 @@ async def main():
             "🔍 OB + FVG + CRT | Fibo 61.8–70.9%\n"
             "📈 H4 → H1 → M5\n"
             "⚖️ R:R min 2.0 | Cooldown 4h\n"
-            "🏆 Score qualité 1–5\n"
+            f"🏆 Score minimum {MIN_SCORE}/5\n"
             "📬 Suivi résultat après 30 min\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
