@@ -1,8 +1,8 @@
 """
-Deriv Synthetic Signal Bot
-Basé sur Multi-Asset Bot v5
+Deriv Synthetic Signal Bot v2
 25 instruments synthétiques Deriv
-Zone 61.8-70.9% + FVG + OB
+Zone 61.8% + 70.5% + 78.6% + FVG + OB
+SL sous/sur le swing high/low
 """
 import os
 import asyncio
@@ -18,46 +18,45 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 CHECK_INTERVAL = 300
 
 INSTRUMENTS = {
-    "R_10":    {"name": "Volatility 10",      "emoji": "📊", "min_range": 0.5},
-    "R_25":    {"name": "Volatility 25",      "emoji": "📊", "min_range": 1.0},
-    "R_50":    {"name": "Volatility 50",      "emoji": "📊", "min_range": 2.0},
-    "R_75":    {"name": "Volatility 75",      "emoji": "📊", "min_range": 3.0},
-    "R_100":   {"name": "Volatility 100",     "emoji": "📊", "min_range": 5.0},
-    "1HZ10V":  {"name": "Volatility 10 (1s)", "emoji": "⚡", "min_range": 0.5},
-    "1HZ25V":  {"name": "Volatility 25 (1s)", "emoji": "⚡", "min_range": 1.0},
-    "1HZ50V":  {"name": "Volatility 50 (1s)", "emoji": "⚡", "min_range": 2.0},
-    "1HZ75V":  {"name": "Volatility 75 (1s)", "emoji": "⚡", "min_range": 3.0},
-    "1HZ100V": {"name": "Volatility 100 (1s)","emoji": "⚡", "min_range": 5.0},
-    "BOOM300N":{"name": "Boom 300",           "emoji": "🚀", "min_range": 10.0},
-    "BOOM500": {"name": "Boom 500",           "emoji": "🚀", "min_range": 10.0},
-    "BOOM600": {"name": "Boom 600",           "emoji": "🚀", "min_range": 10.0},
-    "BOOM900": {"name": "Boom 900",           "emoji": "🚀", "min_range": 10.0},
-    "BOOM1000":{"name": "Boom 1000",          "emoji": "🚀", "min_range": 10.0},
-    "CRASH300N":{"name": "Crash 300",         "emoji": "💥", "min_range": 10.0},
-    "CRASH500":{"name": "Crash 500",          "emoji": "💥", "min_range": 10.0},
-    "CRASH600":{"name": "Crash 600",          "emoji": "💥", "min_range": 10.0},
-    "CRASH900":{"name": "Crash 900",          "emoji": "💥", "min_range": 10.0},
-    "CRASH1000":{"name": "Crash 1000",        "emoji": "💥", "min_range": 10.0},
-    "JD10":    {"name": "Jump 10",            "emoji": "🦘", "min_range": 5.0},
-    "JD25":    {"name": "Jump 25",            "emoji": "🦘", "min_range": 10.0},
-    "JD50":    {"name": "Jump 50",            "emoji": "🦘", "min_range": 20.0},
-    "JD75":    {"name": "Jump 75",            "emoji": "🦘", "min_range": 30.0},
-    "JD100":   {"name": "Jump 100",           "emoji": "🦘", "min_range": 50.0},
+    "R_10":     {"name": "Volatility 10",       "emoji": "🔵", "min_range": 0.5},
+    "R_25":     {"name": "Volatility 25",       "emoji": "🟣", "min_range": 1.0},
+    "R_50":     {"name": "Volatility 50",       "emoji": "🟡", "min_range": 2.0},
+    "R_75":     {"name": "Volatility 75",       "emoji": "🟠", "min_range": 3.0},
+    "R_100":    {"name": "Volatility 100",      "emoji": "🔴", "min_range": 5.0},
+    "1HZ10V":   {"name": "Volatility 10 (1s)", "emoji": "🔵", "min_range": 0.5},
+    "1HZ25V":   {"name": "Volatility 25 (1s)", "emoji": "🟣", "min_range": 1.0},
+    "1HZ50V":   {"name": "Volatility 50 (1s)", "emoji": "🟡", "min_range": 2.0},
+    "1HZ75V":   {"name": "Volatility 75 (1s)", "emoji": "🟠", "min_range": 3.0},
+    "1HZ100V":  {"name": "Volatility 100 (1s)","emoji": "🔴", "min_range": 5.0},
+    "BOOM300N": {"name": "Boom 300",            "emoji": "🚀", "min_range": 5.0},
+    "BOOM500":  {"name": "Boom 500",            "emoji": "🚀", "min_range": 8.0},
+    "BOOM600":  {"name": "Boom 600",            "emoji": "🚀", "min_range": 8.0},
+    "BOOM900":  {"name": "Boom 900",            "emoji": "🚀", "min_range": 10.0},
+    "BOOM1000": {"name": "Boom 1000",           "emoji": "🚀", "min_range": 10.0},
+    "CRASH300N":{"name": "Crash 300",           "emoji": "💥", "min_range": 5.0},
+    "CRASH500": {"name": "Crash 500",           "emoji": "💥", "min_range": 8.0},
+    "CRASH600": {"name": "Crash 600",           "emoji": "💥", "min_range": 8.0},
+    "CRASH900": {"name": "Crash 900",           "emoji": "💥", "min_range": 10.0},
+    "CRASH1000":{"name": "Crash 1000",          "emoji": "💥", "min_range": 10.0},
+    "JD10":     {"name": "Jump 10",             "emoji": "⚡", "min_range": 5.0},
+    "JD25":     {"name": "Jump 25",             "emoji": "⚡", "min_range": 10.0},
+    "JD50":     {"name": "Jump 50",             "emoji": "⚡", "min_range": 20.0},
+    "JD75":     {"name": "Jump 75",             "emoji": "⚡", "min_range": 30.0},
+    "JD100":    {"name": "Jump 100",            "emoji": "⚡", "min_range": 50.0},
+    "stpindx":  {"name": "Step Index",          "emoji": "📶", "min_range": 0.1},
 }
 
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
-FIB_LEVELS = [0.618, 0.709]
+FIB_LEVELS = [0.618, 0.705, 0.786]
+FIB_LABELS = {0.618: "61.8%", 0.705: "70.5%", 0.786: "78.6%"}
 TOLERANCE_PCT = 0.50
-MIN_SCORE = 4
+MIN_SCORE = 3
 MIN_RR = 2.0
+SL_BUFFER_PCT = 0.002
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
-
 active_signals = {}
-
-
-# ─────────────────────────── ANALYSIS ───────────────────────────
 
 def compute_ema(closes, period):
     if len(closes) < period:
@@ -68,7 +67,6 @@ def compute_ema(closes, period):
         ema = price * k + ema * (1 - k)
     return ema
 
-
 def get_trend(candles):
     if not candles or len(candles) < 5:
         return "neutral"
@@ -78,13 +76,11 @@ def get_trend(candles):
         return "neutral"
     return "bull" if closes[-1] > ema21 else "bear"
 
-
 def get_structure(candles):
     if not candles or len(candles) < 3:
         return "neutral"
     bull = sum(1 for c in candles[:3] if c["close"] > c["open"])
     return "bull" if bull >= 2 else "bear"
-
 
 def detect_swing(candles, min_range):
     if len(candles) < 10:
@@ -94,7 +90,6 @@ def detect_swing(candles, min_range):
     if h - l < min_range:
         return None
     return h, l
-
 
 def detect_fvg(candles, direction, zh, zl):
     fvgs = []
@@ -111,7 +106,6 @@ def detect_fvg(candles, direction, zh, zl):
             if zl <= mid <= zh:
                 fvgs.append({"type": "Bear FVG", "top": round(c0["low"], 5), "bot": round(c2["high"], 5)})
     return fvgs[-2:] if fvgs else []
-
 
 def detect_ob(candles, direction, zh, zl):
     obs = []
@@ -130,7 +124,6 @@ def detect_ob(candles, direction, zh, zl):
             obs.append({"type": "Bear OB", "top": round(ob["high"], 5), "bot": round(ob["low"], 5)})
     return obs[-2:] if obs else []
 
-
 def compute_score(obs, fvgs, h4_trend, h1_struct, atr_ratio):
     score = 0
     if obs: score += 1
@@ -140,10 +133,8 @@ def compute_score(obs, fvgs, h4_trend, h1_struct, atr_ratio):
     if atr_ratio and atr_ratio > 1.2: score += 0.5
     return min(5, round(score))
 
-
 def score_to_stars(score):
     return "⭐" * score + "☆" * (5 - score)
-
 
 def detect_setup(symbol, price, m5, h1, h4, min_range, name, emoji):
     swing = detect_swing(m5, min_range)
@@ -151,35 +142,27 @@ def detect_setup(symbol, price, m5, h1, h4, min_range, name, emoji):
         return None
     high, low = swing
     rng = high - low
-
     h4_trend = get_trend(h4) if h4 else get_trend(m5)
     h1_struct = get_structure(h1) if h1 else "neutral"
     direction = h4_trend
     if direction == "neutral":
         direction = "bull" if m5[0]["close"] > m5[-1]["close"] else "bear"
-
     tol = rng * TOLERANCE_PCT / 100
-
+    buffer = rng * SL_BUFFER_PCT
     for ratio in FIB_LEVELS:
         if direction == "bull":
             level = round(high - rng * ratio, 5)
         else:
             level = round(low + rng * ratio, 5)
-
         if abs(price - level) > tol:
             continue
-
         zh = level + rng * 0.01
         zl = level - rng * 0.01
-
         fvgs = detect_fvg(m5, direction, zh, zl)
         obs = detect_ob(m5, direction, zh, zl)
         confluence = (1 if fvgs else 0) + (1 if obs else 0)
-
         if confluence < 1:
             continue
-
-        # ATR
         trs = []
         for i in range(1, len(m5)):
             tr = max(m5[i]["high"] - m5[i]["low"],
@@ -191,64 +174,47 @@ def detect_setup(symbol, price, m5, h1, h4, min_range, name, emoji):
             current_atr = sum(trs[-14:]) / 14
             avg_atr = sum(trs) / len(trs)
             atr_ratio = round(current_atr / avg_atr, 2) if avg_atr > 0 else None
-
         score = compute_score(obs, fvgs, h4_trend, h1_struct, atr_ratio)
         if score < MIN_SCORE:
             continue
-
-        sd = rng * 0.05
-        t1d = rng * 0.382
-        t2d = rng * 0.618
-
         if direction == "bull":
-            sl = round(level - sd, 5)
+            sl = round(low - buffer, 5)
+            t1d = rng * 0.382
+            t2d = rng * 0.618
             tp1 = round(level + t1d, 5)
             tp2 = round(level + t2d, 5)
             bias = "BUY"
             sig_emoji = "🟢"
         else:
-            sl = round(level + sd, 5)
+            sl = round(high + buffer, 5)
+            t1d = rng * 0.382
+            t2d = rng * 0.618
             tp1 = round(level - t1d, 5)
             tp2 = round(level - t2d, 5)
             bias = "SELL"
             sig_emoji = "🔴"
-
         sl_dist = abs(level - sl)
         if sl_dist == 0:
             continue
         rr1 = round(abs(tp1 - level) / sl_dist, 1)
         rr2 = round(abs(tp2 - level) / sl_dist, 1)
-
         if rr1 < MIN_RR:
             continue
-
         return {
-            "symbol": symbol,
-            "name": name,
-            "asset_emoji": emoji,
-            "direction": direction,
-            "bias": bias,
-            "emoji": sig_emoji,
-            "fib_label": f"{int(ratio*1000)/10}%",
-            "price": round(price, 5),
-            "entry": level,
+            "symbol": symbol, "name": name, "asset_emoji": emoji,
+            "direction": direction, "bias": bias, "emoji": sig_emoji,
+            "fib_label": FIB_LABELS[ratio],
+            "price": round(price, 5), "entry": level,
             "sl": sl, "tp1": tp1, "tp2": tp2,
             "rr1": rr1, "rr2": rr2,
-            "swing_high": round(high, 5),
-            "swing_low": round(low, 5),
-            "h4": h4_trend.upper(),
-            "h1": h1_struct.upper(),
-            "fvgs": fvgs,
-            "obs": obs,
-            "confluence": confluence,
-            "score": score,
+            "swing_high": round(high, 5), "swing_low": round(low, 5),
+            "h4": h4_trend.upper(), "h1": h1_struct.upper(),
+            "fvgs": fvgs, "obs": obs,
+            "confluence": confluence, "score": score,
             "atr_ratio": atr_ratio,
-            "zh": round(zh, 5),
-            "zl": round(zl, 5),
+            "zh": round(zh, 5), "zl": round(zl, 5),
         }
-
     return None
-
 
 def format_signal(s):
     dl = "LONG" if s["direction"] == "bull" else "SHORT"
@@ -258,6 +224,7 @@ def format_signal(s):
     ob_txt = f"\n├ {s['obs'][-1]['type']}: `{s['obs'][-1]['bot']}`–`{s['obs'][-1]['top']}`" if s["obs"] else ""
     p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
     now = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    sl_note = "sous Swing Low 🔽" if s["direction"] == "bull" else "au-dessus Swing High 🔼"
     return (
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{s['emoji']} *SIGNAL {s['name']} — {s['bias']}* {s['asset_emoji']}\n"
@@ -276,15 +243,12 @@ def format_signal(s):
         f"└ Zone {s['fib_label']} ✅\n\n"
         f"🎯 *ORDRE {dl}*\n"
         f"├ Entrée : `{p(s['entry'])}`\n"
-        f"├ SL : `{p(s['sl'])}` 🛑\n"
+        f"├ SL : `{p(s['sl'])}` 🛑 ({sl_note})\n"
         f"├ TP1 : `{p(s['tp1'])}` ✅ R:R 1:{s['rr1']}\n"
         f"└ TP2 : `{p(s['tp2'])}` 🚀 R:R 1:{s['rr2']}\n\n"
         f"📊 *ATR :* `{s['atr_ratio']}x` moyenne\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
-
-
-# ─────────────────────────── DERIV WS ───────────────────────────
 
 async def fetch_candles(ws, symbol, granularity, count=60):
     req = {"ticks_history": symbol, "adjust_start_time": 1, "count": count,
@@ -299,7 +263,6 @@ async def fetch_candles(ws, symbol, granularity, count=60):
         if "error" in resp:
             log.warning(f"Deriv error {symbol}: {resp['error']}")
             return []
-
 
 async def fetch_current_price(symbol):
     try:
@@ -317,9 +280,6 @@ async def fetch_current_price(symbol):
     except Exception:
         return None
 
-
-# ─────────────────────────── SUIVI TP/SL ───────────────────────────
-
 async def check_active_signals(bot):
     to_remove = []
     for symbol, data in list(active_signals.items()):
@@ -327,11 +287,9 @@ async def check_active_signals(bot):
         current_price = await fetch_current_price(symbol)
         if current_price is None:
             continue
-
         direction = sig["direction"]
         tp1, tp2, sl = sig["tp1"], sig["tp2"], sig["sl"]
         p = lambda x: f"{x:.5f}" if x < 10 else f"{x:.2f}"
-
         result = None
         if direction == "bull":
             if current_price >= tp2: result = ("tp2", "🚀", "TP2 ATTEINT")
@@ -341,7 +299,6 @@ async def check_active_signals(bot):
             if current_price <= tp2: result = ("tp2", "🚀", "TP2 ATTEINT")
             elif current_price <= tp1: result = ("tp1", "✅", "TP1 ATTEINT")
             elif current_price >= sl: result = ("sl", "❌", "SL TOUCHÉ")
-
         if result:
             _, emoji, label = result
             msg = (
@@ -356,17 +313,12 @@ async def check_active_signals(bot):
                 f"━━━━━━━━━━━━━━━━━━━━"
             )
             await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-            log.info(f"Suivi {symbol} → {label}")
             to_remove.append(symbol)
-
     for symbol in to_remove:
         active_signals.pop(symbol, None)
 
-
-# ─────────────────────────── MAIN LOOP ───────────────────────────
-
 async def scan_all(bot):
-    log.info("Starting scan...")
+    log.info("Scan en cours...")
     await check_active_signals(bot)
     try:
         async with websockets.connect(DERIV_WS_URL, ping_interval=20) as ws:
@@ -381,41 +333,35 @@ async def scan_all(bot):
                     if not m5:
                         continue
                     price = m5[-1]["close"]
-                    setup = detect_setup(
-                        symbol, price, m5, h1 or [], h4 or [],
-                        cfg["min_range"], cfg["name"], cfg["emoji"]
-                    )
+                    setup = detect_setup(symbol, price, m5, h1 or [], h4 or [],
+                                         cfg["min_range"], cfg["name"], cfg["emoji"])
                     if setup:
-                        await bot.send_message(
-                            chat_id=CHAT_ID,
-                            text=format_signal(setup),
-                            parse_mode=ParseMode.MARKDOWN
-                        )
+                        await bot.send_message(chat_id=CHAT_ID, text=format_signal(setup),
+                                               parse_mode=ParseMode.MARKDOWN)
                         active_signals[symbol] = {"signal": setup}
                         log.info(f"Signal: {symbol} {setup['bias']} Score={setup['score']}")
                 except Exception as e:
-                    log.error(f"Error {symbol}: {e}")
+                    log.error(f"Erreur {symbol}: {e}")
     except Exception as e:
-        log.error(f"WS error: {e}")
-    log.info("Scan complete.")
-
+        log.error(f"WS erreur: {e}")
+    log.info("Scan terminé.")
 
 async def main():
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        raise ValueError("Missing TELEGRAM_TOKEN or CHAT_ID")
+        raise ValueError("TELEGRAM_TOKEN ou CHAT_ID manquant")
     bot = Bot(token=TELEGRAM_TOKEN)
     await bot.send_message(
         chat_id=CHAT_ID,
         text=(
-            "🤖 *Deriv Synthetic Signal Bot*\n"
+            "🤖 *Deriv Synthetic Signal Bot v2*\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            "✅ Bot démarré\n"
             f"📊 {len(INSTRUMENTS)} instruments surveillés\n"
-            "⏱ Scan toutes les 5 minutes\n"
-            "🔍 OB + FVG | Fibo 61.8–70.9%\n"
+            "🔍 Zone 61.8% + 70.5% + 78.6% + FVG + OB\n"
             "📈 H4 → H1 → M5\n"
-            f"⚖️ R:R min {MIN_RR} | Score min {MIN_SCORE}/5\n"
+            f"⭐ Score min {MIN_SCORE}/5 | R:R min {MIN_RR}\n"
+            "🛑 SL sous/sur Swing High/Low\n"
             "📬 Suivi TP/SL en temps réel\n"
+            "⏱ Scan toutes les 5 min\n"
             "━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode=ParseMode.MARKDOWN,
@@ -423,7 +369,6 @@ async def main():
     while True:
         await scan_all(bot)
         await asyncio.sleep(CHECK_INTERVAL)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
