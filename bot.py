@@ -43,7 +43,6 @@ INSTRUMENTS = {
     "JD50":     {"name": "Jump 50",             "emoji": "⚡", "min_range": 20.0},
     "JD75":     {"name": "Jump 75",             "emoji": "⚡", "min_range": 30.0},
     "JD100":    {"name": "Jump 100",            "emoji": "⚡", "min_range": 50.0},
-    "stpindx":  {"name": "Step Index",          "emoji": "📶", "min_range": 0.1},
 }
 
 DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
